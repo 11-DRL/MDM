@@ -1,0 +1,174 @@
+{
+  "name": "PL_MDM_Master_Location",
+  "properties": {
+    "description": "MDM Master pipeline for Business Location entity. Pattern: PL_Master_Execution.json (adf-master-dwh-dev-gwc). Parametrized via mdm_config.entity_config.",
+    "activities": [
+      {
+        "name": "ACT_GEN_SPRC_SaveMainLoggingInfo",
+        "type": "Script",
+        "dependsOn": [],
+        "typeProperties": {
+          "scripts": [{
+            "type": "NonQuery",
+            "text": {
+              "value": "@concat('INSERT INTO mdm_config.execution_log (run_id, entity_id, process_name, status, started_at) VALUES (''', pipeline().RunId, ''', ''business_location'', ''PL_MDM_Master_Location'', ''Starting'', current_timestamp())')",
+              "type": "Expression"
+            }
+          }]
+        },
+        "linkedServiceName": { "referenceName": "LS_Fabric_Lakehouse", "type": "LinkedServiceReference" }
+      },
+      {
+        "name": "ACT_GEN_EPIPE_Extract_Lightspeed",
+        "type": "ExecutePipeline",
+        "dependsOn": [{ "activity": "ACT_GEN_SPRC_SaveMainLoggingInfo", "dependencyConditions": ["Succeeded"] }],
+        "typeProperties": {
+          "pipeline": { "referenceName": "PL_MDM_Extract_Lightspeed_Locations", "type": "PipelineReference" },
+          "waitOnCompletion": true,
+          "parameters": {
+            "__paramRunId":      { "value": "@pipeline().RunId", "type": "Expression" },
+            "__paramTenantName": { "value": "@pipeline().parameters.__paramTenantName", "type": "Expression" }
+          }
+        }
+      },
+      {
+        "name": "ACT_GEN_EPIPE_Extract_Yext",
+        "type": "ExecutePipeline",
+        "dependsOn": [{ "activity": "ACT_GEN_SPRC_SaveMainLoggingInfo", "dependencyConditions": ["Succeeded"] }],
+        "typeProperties": {
+          "pipeline": { "referenceName": "PL_MDM_Extract_Yext_Locations", "type": "PipelineReference" },
+          "waitOnCompletion": true,
+          "parameters": {
+            "__paramRunId":      { "value": "@pipeline().RunId", "type": "Expression" },
+            "__paramTenantName": { "value": "@pipeline().parameters.__paramTenantName", "type": "Expression" }
+          }
+        }
+      },
+      {
+        "name": "ACT_GEN_EPIPE_Extract_McWin",
+        "type": "ExecutePipeline",
+        "dependsOn": [{ "activity": "ACT_GEN_SPRC_SaveMainLoggingInfo", "dependencyConditions": ["Succeeded"] }],
+        "typeProperties": {
+          "pipeline": { "referenceName": "PL_MDM_Extract_McWin_Locations", "type": "PipelineReference" },
+          "waitOnCompletion": true,
+          "parameters": {
+            "__paramRunId":      { "value": "@pipeline().RunId", "type": "Expression" },
+            "__paramTenantName": { "value": "@pipeline().parameters.__paramTenantName", "type": "Expression" }
+          }
+        }
+      },
+      {
+        "name": "ACT_GEN_EPIPE_Extract_GoPOS",
+        "type": "ExecutePipeline",
+        "dependsOn": [{ "activity": "ACT_GEN_SPRC_SaveMainLoggingInfo", "dependencyConditions": ["Succeeded"] }],
+        "typeProperties": {
+          "pipeline": { "referenceName": "PL_MDM_Extract_GoPOS_Locations", "type": "PipelineReference" },
+          "waitOnCompletion": true,
+          "parameters": {
+            "__paramRunId":      { "value": "@pipeline().RunId", "type": "Expression" },
+            "__paramTenantName": { "value": "@pipeline().parameters.__paramTenantName", "type": "Expression" }
+          }
+        }
+      },
+      {
+        "name": "ACT_NTB_LoadRawVault",
+        "type": "SynapseNotebook",
+        "dependsOn": [
+          { "activity": "ACT_GEN_EPIPE_Extract_Lightspeed", "dependencyConditions": ["Succeeded"] },
+          { "activity": "ACT_GEN_EPIPE_Extract_Yext",       "dependencyConditions": ["Succeeded"] },
+          { "activity": "ACT_GEN_EPIPE_Extract_McWin",      "dependencyConditions": ["Succeeded"] },
+          { "activity": "ACT_GEN_EPIPE_Extract_GoPOS",      "dependencyConditions": ["Succeeded"] }
+        ],
+        "typeProperties": {
+          "notebook": { "referenceName": "nb_load_raw_vault_location", "type": "NotebookReference" },
+          "parameters": {
+            "run_id":      { "value": "@pipeline().RunId", "type": "string" },
+            "tenant_name": { "value": "@pipeline().parameters.__paramTenantName", "type": "string" },
+            "full_load":   { "value": "@string(pipeline().parameters.__paramFullLoad)", "type": "string" }
+          }
+        }
+      },
+      {
+        "name": "ACT_NTB_MatchLocation",
+        "type": "SynapseNotebook",
+        "dependsOn": [
+          { "activity": "ACT_NTB_LoadRawVault", "dependencyConditions": ["Succeeded"] }
+        ],
+        "typeProperties": {
+          "notebook": { "referenceName": "nb_match_location", "type": "NotebookReference" },
+          "parameters": {
+            "run_id":           { "value": "@pipeline().RunId", "type": "string" },
+            "match_threshold":  { "value": "0.85", "type": "string" },
+            "auto_accept":      { "value": "0.97", "type": "string" }
+          }
+        }
+      },
+      {
+        "name": "ACT_GEN_COND_HasPendingPairs",
+        "type": "IfCondition",
+        "dependsOn": [
+          { "activity": "ACT_NTB_MatchLocation", "dependencyConditions": ["Succeeded"] }
+        ],
+        "typeProperties": {
+          "expression": {
+            "value": "@greater(int(activity('ACT_NTB_MatchLocation').output.runOutput), 0)",
+            "type": "Expression"
+          },
+          "ifTrueActivities": [
+            {
+              "name": "ACT_GEN_WEB_NotifyStewards",
+              "type": "WebActivity",
+              "typeProperties": {
+                "method": "POST",
+                "url": {
+                  "value": "@pipeline().globalParameters.TeamsWebhookUrl",
+                  "type": "Expression"
+                },
+                "body": {
+                  "value": "@concat('{\"text\": \"MDM Review needed: ', string(activity('ACT_NTB_MatchLocation').output.runOutput), ' pending Business Location pairs. Open: https://mdm-app.example.com/queue\"}')",
+                  "type": "Expression"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "ACT_NTB_DeriveGold",
+        "type": "SynapseNotebook",
+        "dependsOn": [
+          { "activity": "ACT_GEN_COND_HasPendingPairs", "dependencyConditions": ["Succeeded"] }
+        ],
+        "typeProperties": {
+          "notebook": { "referenceName": "nb_derive_gold_location", "type": "NotebookReference" },
+          "parameters": {
+            "run_id": { "value": "@pipeline().RunId", "type": "string" }
+          }
+        }
+      },
+      {
+        "name": "ACT_GEN_EPIPE_ErrorReporting",
+        "type": "ExecutePipeline",
+        "dependsOn": [
+          { "activity": "ACT_NTB_DeriveGold",    "dependencyConditions": ["Failed"] },
+          { "activity": "ACT_NTB_MatchLocation",  "dependencyConditions": ["Failed"] },
+          { "activity": "ACT_NTB_LoadRawVault",   "dependencyConditions": ["Failed"] }
+        ],
+        "typeProperties": {
+          "pipeline": { "referenceName": "PL_MDM_ErrorReporting", "type": "PipelineReference" },
+          "waitOnCompletion": true,
+          "parameters": {
+            "__paramMasterRunId": { "value": "@pipeline().RunId", "type": "Expression" }
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "__paramTenantName": { "type": "string", "defaultValue": "losteria" },
+      "__paramEntityId":   { "type": "string", "defaultValue": "business_location" },
+      "__paramFullLoad":   { "type": "bool",   "defaultValue": false }
+    },
+    "folder": { "name": "MDM/Master" },
+    "annotations": ["mdm", "data-vault", "business-location"]
+  }
+}
