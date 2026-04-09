@@ -1,0 +1,9 @@
+# MDM — gitignore
+node_modules/
+dist/
+.env
+*.env.local
+.DS_Store
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
