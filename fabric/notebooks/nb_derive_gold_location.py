@@ -116,6 +116,8 @@ golden = spark.sql("""
     SELECT
         pit.location_hk,
         pit.snapshot_date,
+        h.business_key AS h_business_key,
+        h.record_source AS record_source,
         -- Lightspeed attributes
         ls.name        AS ls_name,
         ls.country     AS ls_country,
@@ -148,6 +150,7 @@ golden = spark.sql("""
         gs.country         AS gs_country,
         gs.phone           AS gs_phone
     FROM silver_dv.pit_location pit
+    JOIN silver_dv.hub_location h ON pit.location_hk = h.location_hk
     LEFT JOIN silver_dv.sat_location_lightspeed ls
         ON pit.location_hk = ls.location_hk AND ls.load_date = pit.sat_lightspeed_ld
     LEFT JOIN silver_dv.sat_location_yext ys
@@ -196,11 +199,23 @@ golden_final = (
          .when(F.col("ms_city").isNotNull(), F.lit("mcwin"))
          .when(F.col("ys_city").isNotNull(), F.lit("yext"))
          .otherwise(F.lit("gopos")))
-    # Source crosswalk IDs
-    .withColumn("lightspeed_bl_id", F.col("ls_bl_id"))
-    .withColumn("yext_id", F.lit(None))    # TODO: join hub na businessKey prefix
-    .withColumn("mcwin_restaurant_id", F.lit(None))
-    .withColumn("gopos_location_id", F.lit(None))
+    # Source crosswalk IDs — extracted from hub.business_key (format: "source|id")
+    .withColumn("lightspeed_bl_id",
+        F.when(F.col("record_source") == "lightspeed",
+               F.split(F.col("h_business_key"), "\\|").getItem(1).cast("long"))
+         .otherwise(F.lit(None).cast("long")))
+    .withColumn("yext_id",
+        F.when(F.col("record_source") == "yext",
+               F.split(F.col("h_business_key"), "\\|").getItem(1))
+         .otherwise(F.lit(None).cast("string")))
+    .withColumn("mcwin_restaurant_id",
+        F.when(F.col("record_source") == "mcwin",
+               F.split(F.col("h_business_key"), "\\|").getItem(1))
+         .otherwise(F.lit(None).cast("string")))
+    .withColumn("gopos_location_id",
+        F.when(F.col("record_source") == "gopos",
+               F.split(F.col("h_business_key"), "\\|").getItem(1))
+         .otherwise(F.lit(None).cast("string")))
     .withColumn("valid_from", F.col("snapshot_date"))
     .withColumn("valid_to", F.lit(None).cast("timestamp"))
     .withColumn("is_current", F.lit(True))

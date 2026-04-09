@@ -275,13 +275,140 @@ if yext_raw.count() > 0:
     """)
 
 # ---------------------------------------------------------------------------
-# CELL 8: McWin + GoPOS — analogicznie (pomięte dla zwięzłości, wzorzec ten sam)
+# CELL 8: McWin → Hub + Satellite
 # ---------------------------------------------------------------------------
-# TODO: McWin i GoPOS ładowane tym samym wzorcem co Yext
-# Patrz: analogiczny pattern w CELL 7
+
+mcwin_raw = spark.sql(f"""
+    SELECT * FROM bronze.mcwin_restaurant_masterdata
+    WHERE _load_date > '{wm.get("mcwin", "1900-01-01")}'
+      AND _tenant_name = '{tenant_name}'
+""")
+
+if mcwin_raw.count() > 0:
+    mcwin_prep = (
+        mcwin_raw
+        .withColumn("business_key", F.concat(F.lit("mcwin|"), F.col("restaurant_id")))
+        .withColumn("location_hk", udf_hk(F.col("business_key")))
+        .withColumn("name_std", F.upper(F.trim(F.col("restaurant_name"))))
+        .withColumn("country_std", udf_normalize_country(F.col("country")))
+        .withColumn("city_std", F.upper(F.trim(F.col("city"))))
+    )
+    mcwin_prep = apply_key_resolution(mcwin_prep)
+
+    hub_delta.alias("hub").merge(
+        mcwin_prep.alias("src"), "hub.location_hk = src.location_hk"
+    ).whenNotMatchedInsert(values={
+        "location_hk": "src.location_hk", "business_key": "src.business_key",
+        "load_date": F.lit(LOAD_DATE), "record_source": F.lit("mcwin")
+    }).execute()
+
+    mcwin_sat = (
+        mcwin_prep
+        .withColumn("hash_diff", udf_hash_diff(
+            F.col("restaurant_name"), F.col("city"), F.col("zip_code"),
+            F.col("country"), F.col("cost_center"), F.col("region"), F.col("is_active")))
+        .withColumn("load_date", F.lit(LOAD_DATE))
+        .withColumn("load_end_date", F.lit(None).cast(TimestampType()))
+        .withColumn("record_source", F.lit("mcwin"))
+        .select(
+            "location_hk", "load_date", "load_end_date", "hash_diff", "record_source",
+            F.col("restaurant_name"), F.col("cost_center"), F.col("region"),
+            F.col("country"), F.col("city"), F.col("zip_code"),
+            F.col("address"), F.col("is_active"),
+            "name_std", "country_std", "city_std"
+        )
+    )
+
+    sat_mcwin = DeltaTable.forName(spark, "silver_dv.sat_location_mcwin")
+    sat_mcwin.alias("sat").merge(
+        mcwin_sat.alias("src"),
+        "sat.location_hk = src.location_hk AND sat.load_end_date IS NULL AND sat.hash_diff != src.hash_diff"
+    ).whenMatchedUpdate(set={"load_end_date": F.lit(LOAD_DATE)}).execute()
+
+    mcwin_sat.alias("src").join(
+        spark.sql("SELECT location_hk, hash_diff FROM silver_dv.sat_location_mcwin WHERE load_end_date IS NULL").alias("e"),
+        (F.col("src.location_hk") == F.col("e.location_hk")) & (F.col("src.hash_diff") == F.col("e.hash_diff")),
+        "left_anti"
+    ).write.format("delta").mode("append").saveAsTable("silver_dv.sat_location_mcwin")
+
+    print(f"McWin: {mcwin_raw.count()} source rows processed")
+
+    spark.sql(f"""
+        MERGE INTO mdm_config.source_watermark AS w
+        USING (SELECT 'business_location' as entity_id, 'mcwin' as source_system,
+                      current_timestamp() as ts, '{run_id}' as run_id) AS s
+        ON w.entity_id = s.entity_id AND w.source_system = s.source_system
+        WHEN MATCHED THEN UPDATE SET last_load_date = s.ts, last_run_id = s.run_id, updated_at = s.ts
+    """)
 
 # ---------------------------------------------------------------------------
-# CELL 9: Log wykonania
+# CELL 9: GoPOS → Hub + Satellite
+# ---------------------------------------------------------------------------
+
+gopos_raw = spark.sql(f"""
+    SELECT * FROM bronze.gopos_locations
+    WHERE _load_date > '{wm.get("gopos", "1900-01-01")}'
+      AND _tenant_name = '{tenant_name}'
+""")
+
+if gopos_raw.count() > 0:
+    gopos_prep = (
+        gopos_raw
+        .withColumn("business_key", F.concat(F.lit("gopos|"), F.col("location_id")))
+        .withColumn("location_hk", udf_hk(F.col("business_key")))
+        .withColumn("name_std", F.upper(F.trim(F.col("location_name"))))
+        .withColumn("country_std", udf_normalize_country(F.col("country")))
+        .withColumn("city_std", F.upper(F.trim(F.col("city"))))
+    )
+    gopos_prep = apply_key_resolution(gopos_prep)
+
+    hub_delta.alias("hub").merge(
+        gopos_prep.alias("src"), "hub.location_hk = src.location_hk"
+    ).whenNotMatchedInsert(values={
+        "location_hk": "src.location_hk", "business_key": "src.business_key",
+        "load_date": F.lit(LOAD_DATE), "record_source": F.lit("gopos")
+    }).execute()
+
+    gopos_sat = (
+        gopos_prep
+        .withColumn("hash_diff", udf_hash_diff(
+            F.col("location_name"), F.col("city"), F.col("zip_code"),
+            F.col("country"), F.col("phone"), F.col("is_active").cast("string")))
+        .withColumn("load_date", F.lit(LOAD_DATE))
+        .withColumn("load_end_date", F.lit(None).cast(TimestampType()))
+        .withColumn("record_source", F.lit("gopos"))
+        .select(
+            "location_hk", "load_date", "load_end_date", "hash_diff", "record_source",
+            F.col("location_name"), F.col("address"), F.col("city"),
+            F.col("zip_code"), F.col("country"), F.col("phone"), F.col("is_active"),
+            "name_std", "country_std", "city_std"
+        )
+    )
+
+    sat_gopos = DeltaTable.forName(spark, "silver_dv.sat_location_gopos")
+    sat_gopos.alias("sat").merge(
+        gopos_sat.alias("src"),
+        "sat.location_hk = src.location_hk AND sat.load_end_date IS NULL AND sat.hash_diff != src.hash_diff"
+    ).whenMatchedUpdate(set={"load_end_date": F.lit(LOAD_DATE)}).execute()
+
+    gopos_sat.alias("src").join(
+        spark.sql("SELECT location_hk, hash_diff FROM silver_dv.sat_location_gopos WHERE load_end_date IS NULL").alias("e"),
+        (F.col("src.location_hk") == F.col("e.location_hk")) & (F.col("src.hash_diff") == F.col("e.hash_diff")),
+        "left_anti"
+    ).write.format("delta").mode("append").saveAsTable("silver_dv.sat_location_gopos")
+
+    print(f"GoPOS: {gopos_raw.count()} source rows processed")
+
+    spark.sql(f"""
+        MERGE INTO mdm_config.source_watermark AS w
+        USING (SELECT 'business_location' as entity_id, 'gopos' as source_system,
+                      current_timestamp() as ts, '{run_id}' as run_id) AS s
+        ON w.entity_id = s.entity_id AND w.source_system = s.source_system
+        WHEN MATCHED THEN UPDATE SET last_load_date = s.ts, last_run_id = s.run_id, updated_at = s.ts
+    """)
+
+# ---------------------------------------------------------------------------
+# CELL 10: Log wykonania
 # ---------------------------------------------------------------------------
 spark.sql(f"""
     INSERT INTO mdm_config.execution_log

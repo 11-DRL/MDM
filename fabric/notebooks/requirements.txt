@@ -1,0 +1,10 @@
+# Fabric Notebook Environment Requirements
+# Dodaj w Fabric: Workspace Settings → Data Engineering → Spark Environments
+# lub via: environment.yml w Fabric Environment
+
+# Matching
+jellyfish==1.0.3
+
+# Utilities (zwykle już dostępne w Fabric Spark runtime)
+# delta-spark  — dostępny natywnie w Fabric
+# pyspark      — dostępny natywnie w Fabric
