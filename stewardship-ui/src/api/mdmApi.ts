@@ -1,16 +1,18 @@
+/// <reference types="vite/client" />
 // API client — komunikacja z Fabric SQL Analytics Endpoint + Azure Function write proxy
 // Auth: Azure AD (MSAL) — ten sam wzorzec co MSI w PL_sFTP_State_Manager.json
 // Mock mode: VITE_MOCK_MODE=true → omija Azure AD, używa lokalnych danych demo
-/// <reference types="vite/client" />
+// Fabric iFrame mode: token pochodzi z FabricHostBridge (nie MSAL)
 
 import axios, { AxiosInstance } from 'axios';
 import { PublicClientApplication } from '@azure/msal-browser';
 import type {
-  MatchCandidate, MatchCandidatePage, GoldenLocation,
+  MatchCandidatePage, GoldenLocation,
   StewardshipLogEntry, ReviewQueueStats, PairReviewAction,
   EntityConfig
 } from '../types/mdm.types';
 import { mockApi } from './mockData';
+import { fabricHost } from '../lib/fabricHost';
 
 // ---------- Konfiguracja (env vars w .env) ----------
 export const MOCK_MODE = import.meta.env.VITE_MOCK_MODE === 'true';
@@ -33,9 +35,13 @@ export const msalInstance = new PublicClientApplication({
 });
 
 async function getAccessToken(): Promise<string> {
+  // Priorytet 1: token z Fabric host (gdy działamy wewnątrz Fabric iFrame)
+  const fabricToken = fabricHost.getToken();
+  if (fabricToken) return fabricToken;
+
+  // Priorytet 2: MSAL (standalone, poza Fabric)
   const accounts = msalInstance.getAllAccounts();
   if (accounts.length === 0) throw new Error('Not authenticated');
-
   const result = await msalInstance.acquireTokenSilent({
     scopes: [FABRIC_SCOPE],
     account: accounts[0],

@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  WorkloadManifest.xml — Fabric Extensibility Toolkit
+  Definiuje MDM Stewardship jako natywny workload w Microsoft Fabric.
+  Dokumentacja: https://learn.microsoft.com/fabric/extensibility-toolkit/manifest-workload
+
+  Workflow wdrożenia:
+    DEV:  użyj DevGateway (npx @ms-fabric/workload-devgateway) + localhost:3000
+    PROD: spakuj BE/ + FE/ do .nupkg, wgraj w Fabric Admin Portal → Workloads
+-->
+<WorkloadManifest xmlns="http://schemas.microsoft.com/fabric/workload/2024/01" SchemaVersion="2.0.0">
+
+  <Workload
+    WorkloadName="LOsteria.MDMStewardship"
+    HostingType="FERemote">
+
+    <Version>1.0.0</Version>
+
+    <RemoteServiceConfiguration>
+      <CloudServiceConfiguration>
+        <Cloud>Public</Cloud>
+
+        <!--
+          AADFEApp.AppId = ClientId twojej App Registration w Azure AD
+          Ta sama co VITE_CLIENT_ID w .env — Fabric host pobierze token i wstrzyknie do iFrame
+        -->
+        <AADFEApp>
+          <AppId>__VITE_CLIENT_ID__</AppId>
+        </AADFEApp>
+
+        <!-- false = domyślne bezpieczne sandbox; true tylko gdy potrzebujesz file download z iFrame -->
+        <EnableSandboxRelaxation>false</EnableSandboxRelaxation>
+
+        <Endpoints>
+          <!--
+            DEV:  Url = https://localhost:3000
+            PROD: Url = https://<twoja-domena>.azurestaticapps.net
+                  (musi być subdomeną weryfikowalnej domeny Entra lub azurestaticapps.net)
+          -->
+          <ServiceEndpoint>
+            <Name>Frontend</Name>
+            <Url>__FRONTEND_URL__</Url>
+            <IsEndpointResolutionService>false</IsEndpointResolutionService>
+          </ServiceEndpoint>
+        </Endpoints>
+
+      </CloudServiceConfiguration>
+    </RemoteServiceConfiguration>
+
+  </Workload>
+
+</WorkloadManifest>

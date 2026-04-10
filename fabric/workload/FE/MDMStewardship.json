@@ -1,0 +1,26 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/extensibility-toolkit/item-manifest/2024-01/schema.json",
+
+  "itemType": "MDMStewardshipApp",
+  "workloadName": "LOsteria.MDMStewardship",
+
+  "displayName": {
+    "default": "MDM Stewardship"
+  },
+  "description": {
+    "default": "Business Location master data — review match candidates, edit golden records, audit trail."
+  },
+
+  "icons": {
+    "item32": "assets/mdm-icon-32.png",
+    "item44": "assets/mdm-icon-44.png"
+  },
+
+  "createExperience": {
+    "type": "Modal"
+  },
+
+  "editorExperience": {
+    "type": "FullPage"
+  }
+}

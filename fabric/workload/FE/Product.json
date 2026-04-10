@@ -1,0 +1,27 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/extensibility-toolkit/product-manifest/2024-01/schema.json",
+
+  "workloadName": "LOsteria.MDMStewardship",
+  "version": "1.0.0",
+
+  "displayName": {
+    "default": "MDM Stewardship"
+  },
+  "description": {
+    "default": "Master Data Management for L'Osteria Business Locations — match review, golden records, audit trail."
+  },
+
+  "categories": ["DataGovernance", "Analytics"],
+
+  "publisher": {
+    "name": "L'Osteria Digital",
+    "privacyPolicyUrl": "https://losteria.net/privacy",
+    "termsOfUseUrl":    "https://losteria.net/terms",
+    "supportUrl":       "https://losteria.net/support"
+  },
+
+  "icons": {
+    "item32":  "assets/mdm-icon-32.png",
+    "item44":  "assets/mdm-icon-44.png"
+  }
+}
