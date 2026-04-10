@@ -1,0 +1,21 @@
+{
+  "name": "mdm-write-api",
+  "version": "1.0.0",
+  "description": "Azure Function — write proxy do Fabric Lakehouse Business Vault",
+  "main": "dist/src/functions/*.js",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "start": "func start",
+    "prestart": "npm run build"
+  },
+  "dependencies": {
+    "@azure/functions": "^4.5.0",
+    "@azure/identity": "^4.4.0",
+    "tedious": "^18.6.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "@types/node": "^20.0.0"
+  }
+}
