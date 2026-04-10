@@ -1,104 +1,565 @@
 # MDM Stewardship App — L'Osteria
 
-Fabric-native MDM stewardship application dla sieci restauracji L'Osteria.
+Fabric-natywna aplikacja do zarządzania danymi referencyjnymi (MDM) dla sieci restauracji L'Osteria (~200 lokalizacji, 6 krajów). Unifikuje dane biznesowych lokalizacji z 4 systemów źródłowych przez Data Vault Lite na Fabric Lakehouse, z interfejsem React do przeglądania i zatwierdzania rekordów.
 
-## Architektura
+---
+
+## Spis treści
+
+1. [Architektura systemu](#1-architektura-systemu)
+2. [Struktura repozytorium](#2-struktura-repozytorium)
+3. [Warstwa danych — Fabric Lakehouse](#3-warstwa-danych--fabric-lakehouse)
+4. [Przetwarzanie danych — Notebooki](#4-przetwarzanie-danych--notebooki)
+5. [Orchestracja — Pipeline](#5-orchestracja--pipeline)
+6. [Stewardship UI — React](#6-stewardship-ui--react)
+7. [Azure Function — Write Proxy](#7-azure-function--write-proxy)
+8. [Fabric Workload — natywna integracja](#8-fabric-workload--natywna-integracja)
+9. [Pierwsze uruchomienie](#9-pierwsze-uruchomienie)
+10. [Wdrożenie produkcyjne](#10-wdrożenie-produkcyjne)
+11. [Rozszerzanie systemu](#11-rozszerzanie-systemu)
+12. [Wzorce i decyzje architektoniczne](#12-wzorce-i-decyzje-architektoniczne)
+
+---
+
+## 1. Architektura systemu
 
 ```
-Bronze (raw Delta) → Silver Data Vault Lite (Hub + Satellites) → Gold (dim_location SCD2)
-                          ↑ MDM matching + steward review
-                     Stewardship UI (React + Azure AD)
+Źródła danych                  Fabric Lakehouse (lh_mdm)               UI / Fabric
+─────────────────              ─────────────────────────────────────    ────────────
+Lightspeed (POS)  ──┐
+Yext (locations)  ──┤── Bronze ──▶ Silver Data Vault Lite ──▶ Gold ──▶ Stewardship
+McWin (finance)   ──┤   (raw)      (Hub + Satellites + BV)   (SCD2)    React App
+GoPOS (POS)       ──┘                      ▲
+                                     MDM Matching
+                                   (Jaro-Winkler + Geo)
+                                           │
+                                   Steward Review Queue
+                                   (accept / reject pairs)
 ```
 
-## Struktura repozytorium
+### Przepływ danych krok po kroku
+
+| Krok | Notebook / Pipeline | Input → Output |
+|------|--------------------|-|
+| 1. Extract | PL_MDM_Master_Location | Systemy źródłowe → Bronze Delta tables |
+| 2. Load Raw Vault | nb_load_raw_vault_location | Bronze → hub_location + sat_location_* |
+| 3. Match | nb_match_location | Hub records → bv_location_match_candidates |
+| 4. Review | Stewardship UI | Steward accept/reject → bv_location_key_resolution |
+| 5. Derive Gold | nb_derive_gold_location | PIT + Satellites → gold.dim_location (SCD2) |
+
+---
+
+## 2. Struktura repozytorium
 
 ```
-fabric/
-├── lakehouse/
-│   ├── ddl/
-│   │   ├── bronze/          # Tabele landing zone
-│   │   ├── silver_dv/       # Data Vault: Hub, Satellites, BV
-│   │   ├── gold/            # Golden records SCD2
-│   │   └── mdm_config/      # Tabele konfiguracyjne MDM
-│   └── seed/                # Dane inicjalne (priorytety, config)
-├── notebooks/
-│   ├── nb_load_raw_vault_location.py    # Bronze → DV loader
-│   ├── nb_match_location.py             # Matching + Business Vault
-│   └── nb_derive_gold_location.py       # PIT + Survivorship → Gold
-└── pipelines/
-    └── PL_MDM_Master_Location.json      # Orchestration pipeline
-
-stewardship-ui/                          # React + TypeScript
-├── src/
-│   ├── api/mdmApi.ts          # Fabric SQL Endpoint + Azure Function client
-│   ├── hooks/useMdm.ts        # TanStack Query hooks
-│   ├── types/mdm.types.ts     # Domain types
-│   └── components/
-│       ├── ReviewQueue/       # Lista pending match pairs
-│       ├── PairDetail/        # Side-by-side comparison + accept/reject
-│       └── GoldenViewer/      # Golden record + audit log + editable fields
+MDM/
+├── fabric/
+│   ├── lakehouse/
+│   │   ├── ddl/
+│   │   │   ├── mdm_config/          # 6 tabel konfiguracyjnych
+│   │   │   │   └── create_mdm_config_tables.sql
+│   │   │   ├── bronze/              # 4 landing tables (append-only)
+│   │   │   │   └── create_bronze_tables.sql
+│   │   │   ├── silver_dv/           # Data Vault: Hub, 4×Sat, BV, PIT, audit
+│   │   │   │   └── create_silver_dv_tables.sql
+│   │   │   └── gold/                # Golden records SCD2 + quality
+│   │   │       └── create_gold_tables.sql
+│   │   └── seed/
+│   │       └── seed_mdm_config_location.sql   # Priorytety, wagi, blocking keys
+│   ├── notebooks/
+│   │   ├── nb_load_raw_vault_location.py      # Bronze → Data Vault
+│   │   ├── nb_match_location.py               # Matching + BV candidates
+│   │   └── nb_derive_gold_location.py         # PIT → Survivorship → Gold
+│   ├── pipelines/
+│   │   └── PL_MDM_Master_Location.json        # Master orchestration pipeline
+│   └── workload/                              # Fabric Extensibility Toolkit
+│       ├── BE/
+│       │   ├── WorkloadManifest.xml           # Workload identity + URL frontendu
+│       │   └── MDMStewardship.xml             # Item Type + AAD scopes
+│       └── FE/
+│           ├── Product.json                   # Portal metadata (nazwa, opis)
+│           ├── MDMStewardship.json            # Frontend item config
+│           └── assets/                        # Ikony PNG 32×32 i 44×44
+│
+├── stewardship-ui/                            # React 18 + TypeScript + Vite
+│   ├── src/
+│   │   ├── api/
+│   │   │   ├── mdmApi.ts                      # HTTP klient + auth routing
+│   │   │   └── mockData.ts                    # Demo dane (7 L'Osteria par)
+│   │   ├── hooks/useMdm.ts                    # TanStack Query hooks
+│   │   ├── lib/
+│   │   │   ├── utils.ts                       # cn() helper
+│   │   │   └── fabricHost.ts                  # Fabric iFrame token bridge
+│   │   ├── types/mdm.types.ts                 # Domain types (DV, BV, Gold)
+│   │   ├── components/
+│   │   │   ├── ReviewQueue/                   # Lista pending par + stats
+│   │   │   ├── PairDetail/                    # Side-by-side + score breakdown
+│   │   │   └── GoldenViewer/                  # Edytowalny golden record + audit
+│   │   └── App.tsx                            # Router + 3-tryb auth
+│   ├── staticwebapp.config.json               # SPA routing + CSP headers
+│   └── .env.example
+│
+├── azure-function/                            # TypeScript Azure Function v4
+│   └── src/functions/mdmWrite.ts             # POST review + POST override
+│
+└── .github/workflows/
+    └── deploy-ui.yml                          # GitHub Actions → Azure SWA
 ```
 
-## Pierwsze uruchomienie
+---
 
-### 1. Fabric Lakehouse setup
-```sql
--- Uruchom w kolejności w Fabric Notebook (SQL cell):
--- 1. fabric/lakehouse/ddl/mdm_config/create_mdm_config_tables.sql
--- 2. fabric/lakehouse/ddl/bronze/create_bronze_tables.sql
--- 3. fabric/lakehouse/ddl/silver_dv/create_silver_dv_tables.sql
--- 4. fabric/lakehouse/ddl/gold/create_gold_tables.sql
--- 5. fabric/lakehouse/seed/seed_mdm_config_location.sql
+## 3. Warstwa danych — Fabric Lakehouse
+
+Lakehouse: **`lh_mdm`** | Schematy: `mdm_config`, `bronze`, `silver_dv`, `gold`
+
+### 3.1 Schemat `mdm_config` — konfiguracja
+
+| Tabela | Rola |
+|--------|------|
+| `entity_config` | Lista aktywnych encji MDM; progi matchingu i auto-accept |
+| `field_config` | Wagi pól do scoringu; flaga blocking key; standaryzator |
+| `source_priority` | Survivorship: priorytet źródła per encja i pole (wildcard `*`) |
+| `hash_config` | Template business_key per źródło (np. `lightspeed|{bl_id}`) |
+| `source_watermark` | Watermark incremental load (wzorzec `tblExtractionLog`) |
+| `execution_log` | Log każdego uruchomienia notebooka/pipeline |
+
+### 3.2 Schemat `bronze` — landing zone
+
+Cztery tabele **append-only** (bez transformacji, pełna historia ładowań):
+
+| Tabela | Źródło |
+|--------|--------|
+| `bronze_location_lightspeed` | Lightspeed POS API |
+| `bronze_location_yext` | Yext Location Cloud |
+| `bronze_location_mcwin` | McWin Finance |
+| `bronze_location_gopos` | GoPOS POS System |
+
+### 3.3 Schemat `silver_dv` — Data Vault Lite
+
+```
+hub_location (1 wiersz = 1 unikalna restauracja)
+  location_hk = SHA256("lightspeed|41839-1")
+  │
+  ├── sat_location_lightspeed   ← atrybuty POS (name, country, city, timezone…)
+  ├── sat_location_yext         ← atrybuty lokalizacji (phone, geo, rating…)
+  ├── sat_location_mcwin        ← atrybuty finansowe (cost_center, region…)
+  └── sat_location_gopos        ← atrybuty POS (name, address, phone…)
+
+bv_location_match_candidates   ← pary (hk_left, hk_right) + score + status
+bv_location_key_resolution     ← decyzje stewarda: source_hk → canonical_hk
+pit_location                   ← Point-In-Time snapshot (przyspiesza Gold derive)
+stewardship_log                ← append-only audit każdej akcji
 ```
 
-### 2. Pierwsze załadowanie danych
+**Kluczowy wzorzec — key resolution:**
+
 ```
-Uruchom w Fabric: PL_MDM_Master_Location z __paramFullLoad = true
+Przed: hub(lightspeed|41839) i hub(yext|muc-marienplatz) = 2 osobne Hub keys
+                                      ↓ Steward klika Accept
+bv_location_key_resolution: source_hk=yext-hash → canonical_hk=lightspeed-hash
+                                      ↓ Następny DV load
+Satelita Yext trafia pod Hub key Lightspeed → jeden rekord, dwa źródła
 ```
 
-### 3. React UI
-```bash
-cd stewardship-ui
-cp .env.example .env  # wypełnij zmienne środowiskowe
-npm install
-npm run dev
+### 3.4 Schemat `gold` — Golden Records
+
+| Tabela | Zawartość |
+|--------|-----------|
+| `dim_location` | SCD2 golden record (is_current + valid_from/to + crosswalk IDs) |
+| `dim_location_quality` | Completeness score per lokalizacja per źródło |
+
+---
+
+## 4. Przetwarzanie danych — Notebooki
+
+### `nb_load_raw_vault_location.py` — Bronze → Data Vault
+
+**Co robi:**
+1. Czyta watermark z `mdm_config.source_watermark`
+2. Ładuje nowe rekordy z Bronze (filtr `load_timestamp > watermark`)
+3. Oblicza `location_hk = SHA256(business_key_template)` per rekord
+4. Sprawdza `bv_location_key_resolution` → mapuje source_hk na canonical_hk
+5. MERGE do `hub_location` (nowe klucze)
+6. Oblicza `hash_diff = SHA256(wszystkie atrybuty)` → MERGE do właściwego Satellite
+7. Aktualizuje watermark
+
+**Parametry notebooka:**
+```python
+run_id             # UUID uruchomienia (z pipeline)
+source_system      # 'lightspeed' | 'yext' | 'mcwin' | 'gopos'
+full_load          # true = ignoruj watermark, ładuj wszystko
 ```
 
-## Zmienne środowiskowe (stewardship-ui/.env)
+### `nb_match_location.py` — Matching + Business Vault
+
+**Algorytm:**
+
+```
+Blocking: GROUP BY (country_std, city_std)
+    → eliminuje O(n²) par z różnych miast
+
+Scoring per para w tym samym bloku:
+  score = 0.50 × jaro_winkler(name_std_L, name_std_R)
+        + 0.30 × exact(zip_code)
+        + 0.20 × geo_score(lat/lon < 0.5km → 1.0, < 2km → 0.5)
+
+Auto-accept: score ≥ 0.97 → INSERT do bv_location_key_resolution (auto)
+Pending:     score ≥ 0.85 → INSERT do bv_location_match_candidates (status=pending)
+Ignoruj:     score < 0.85
+```
+
+**Biblioteki:** `jellyfish` (Jaro-Winkler), `math` (Haversine geo distance)
+
+**Zależność:** Wymaga `pip install jellyfish` w Fabric environment.
+
+### `nb_derive_gold_location.py` — PIT → Survivorship → Gold
+
+**Co robi:**
+1. Buduje PIT snapshot: najnowszy `load_date` z każdego Satellite per Hub key
+2. Joinnuje PIT z wszystkimi Satellites na `(location_hk, load_date)`
+3. Stosuje survivorship przez COALESCE w kolejności priorytetów:
+   - Nazwa: Lightspeed(1) > McWin(2) > Yext(3) > GoPOS(4)
+   - Geo (lat/lon): Yext(1) > Lightspeed(2) > GoPOS(3)
+   - Cost center: McWin(1) > Lightspeed(2)
+4. MERGE do `gold.dim_location` (SCD2: nowy wiersz gdy zmiana, `valid_to` na starym)
+5. Oblicza `completeness_score` → INSERT do `dim_location_quality`
+
+---
+
+## 5. Orchestracja — Pipeline
+
+**`PL_MDM_Master_Location.json`** — Fabric Data Pipeline
+
+```
+Start
+  │
+  ├─ [Parallel] Extract Lightspeed ──┐
+  ├─ [Parallel] Extract Yext        ├──▶ Bronze tables
+  ├─ [Parallel] Extract McWin       │
+  └─ [Parallel] Extract GoPOS ──────┘
+  │
+  ▼
+nb_load_raw_vault_location
+  │
+  ▼
+nb_match_location
+  │
+  ├─ [If pending_count > 0] ──▶ Teams Webhook: "7 par czeka na review"
+  │
+  ▼
+nb_derive_gold_location
+  │
+  ▼ (on failure at any step)
+Error Handler → execution_log (status=Failed)
+```
+
+**Parametry pipeline:**
+```json
+"__paramTenantName":   "losteria"
+"__paramEntityId":     "business_location"
+"__paramFullLoad":     false
+```
+
+---
+
+## 6. Stewardship UI — React
+
+### Tryby pracy (auto-detekcja)
+
+| Tryb | Warunek | Auth |
+|------|---------|------|
+| **Mock** | `VITE_MOCK_MODE=true` | brak — 7 przykładowych par L'Osteria |
+| **Fabric iFrame** | `window.self !== window.top` | token z Fabric hosta (FabricHostBridge) |
+| **Standalone** | poza Fabric | Azure AD login przez MSAL |
+
+### Ekrany
+
+**Review Queue** (`/queue`)
+- Stats bar: pending / auto-accepted / golden records / avg completeness
+- Tabela par z inline Accept ✓ / Reject ✗
+- Score badge: zielony ≥97%, niebieski ≥90%, amber ≥85%
+- Paginacja; odświeżanie co 30s
+
+**Pair Detail** (`/pairs/:pairId`)
+- Side-by-side porównanie atrybutów Lewej i Prawej lokalizacji
+- Score breakdown (name/zip/geo)
+- Accept z wyborem canonical HK / Reject z polem reason
+
+**Golden Viewer** (`/golden/:locationHk`)
+- Wszystkie atrybuty golden record z badge źródła (Lightspeed / Yext / etc.)
+- Edycja inline: hover → pencil icon → modal z polem reason
+- Audit log (append-only, od najnowszego)
+- Crosswalk IDs (lightspeed_bl_id, yext_id, mcwin_restaurant_id, gopos_location_id)
+
+### Wzorzec zapisu
+
+```
+UI → POST /api/mdm/location/review → Azure Function
+                                          ↓
+                              UPDATE bv_location_match_candidates
+                              INSERT bv_location_key_resolution  (jeśli accept)
+                              INSERT stewardship_log
+```
+
+UI **nigdy** nie zapisuje bezpośrednio do Delta tables — wymaga Spark/SQL endpoint.
+
+### Zmienne środowiskowe
 
 ```env
-VITE_FABRIC_SQL_ENDPOINT=https://{workspace}.{region}.pbidedicated.windows.net
-VITE_WRITE_API_URL=https://{function-app}.azurewebsites.net
-VITE_TENANT_ID=<azure-tenant-id>
-VITE_CLIENT_ID=<app-registration-client-id>
+VITE_MOCK_MODE=true                   # local dev bez konfiguracji
+VITE_FABRIC_SQL_ENDPOINT=https://...  # {workspace}.{region}.pbidedicated.windows.net
+VITE_WRITE_API_URL=https://...        # Azure Function App URL
+VITE_TENANT_ID=<guid>                 # Azure AD tenant
+VITE_CLIENT_ID=<guid>                 # App Registration client ID
 ```
 
-## Data Vault — kluczowy wzorzec
+---
+
+## 7. Azure Function — Write Proxy
+
+**`azure-function/src/functions/mdmWrite.ts`** — TypeScript Azure Function v4
+
+### Endpointy
 
 ```
-Hub key = SHA256("lightspeed|41839-1")  ← jedna restauracja = jeden Hub key
-                    ↓
-sat_location_lightspeed  ← historyzowane atrybuty Lightspeed
-sat_location_yext        ← historyzowane atrybuty Yext
-(po accept match pair):
-bv_location_key_resolution: source_hk(yext) → canonical_hk(lightspeed)
-→ obie Satellites pod tym samym Hub key
+POST /api/mdm/location/review
+Body: { pairId, action: "accept"|"reject", canonicalHk?, reason? }
+
+  1. UPDATE bv_location_match_candidates SET status = action, reviewed_by, reviewed_at
+  2. (jeśli accept) INSERT bv_location_key_resolution (source_hk → canonical_hk)
+  3. INSERT stewardship_log
+
+POST /api/mdm/location/override
+Body: { locationHk, fieldName, newValue, reason }
+
+  Whitelist pól: name, city, zip_code, country, phone, website_url,
+                 timezone, currency_code, cost_center, region
+  INSERT stewardship_log (gold re-derivowany przez kolejny pipeline run)
+
+GET /api/health → { status: "ok" }
 ```
 
-## Dodanie nowej encji (np. Item)
+### Auth i bezpieczeństwo
 
-1. Dodaj DDL do `ddl/bronze/` i `ddl/silver_dv/`
-2. Dodaj seed do `seed/seed_mdm_config_item.sql`
-3. Skopiuj notebooki z `_location` → `_item`, zmień nazwy tabel
-4. Zarejestruj entity w `mdm_config.entity_config`
-5. Pipeline automatycznie obsłuży przez `__paramEntityId`
+- **Managed Identity** — Function App łączy się do Fabric SQL Endpoint bez haseł
+- Tożsamość MSI wymaga roli **Contributor** w Fabric Workspace
+- Field whitelist w `overrideField` — zapobiega injection przez nazwę pola
+- Caller email z headera `x-ms-client-principal` (Azure AD Easy Auth)
 
-## Źródła wzorców
+### Zmienne środowiskowe (Azure Portal → Configuration)
 
-| Wzorzec | Źródło w losadf/ |
-|---------|-----------------|
-| `__param` naming | Wszystkie ADF pipelines |
-| Logging framework | `adf-master-dwh-dev-gwc/pipeline/PL_Master_Execution.json` |
-| Error cascade | `PL_Data_ErrorReporting.json` |
-| Watermark / incremental | `adf-yext-dwh-dev-gwc` (tblExtractionLog pattern) |
-| Config-driven execution | `adf-manage-dwh-gwc` (tblDwhMigrationTable) |
+```
+FABRIC_SQL_SERVER=<workspace-id>.<region>.pbidedicated.windows.net
+FABRIC_DATABASE=lh_mdm
+```
+
+---
+
+## 8. Fabric Workload — natywna integracja
+
+Apka integruje się z Fabric przez **Extensibility Toolkit** — pojawia się w workspace obok Lakehouse i Notebooków.
+
+### Struktura manifestu
+
+```
+fabric/workload/
+├── BE/
+│   ├── WorkloadManifest.xml    # WorkloadName, HostingType=FERemote, AADFEApp, URL
+│   └── MDMStewardship.xml      # ItemType + RequiredScopes (PowerBI API)
+└── FE/
+    ├── Product.json            # Nazwa, opis, ikony dla Fabric portal
+    ├── MDMStewardship.json     # createExperience, editorExperience
+    └── assets/
+        ├── mdm-icon-32.png     # ← DODAJ (32×32 px PNG)
+        └── mdm-icon-44.png     # ← DODAJ (44×44 px PNG)
+```
+
+### Jak działa auth w iFrame
+
+```
+Fabric host
+  1. Pobiera token z Azure AD (scopes z MDMStewardship.xml)
+  2. window.postMessage({ type: 'FABRIC_AUTH_TOKEN', token, expiresAt })
+React app (src/lib/fabricHost.ts)
+  3. Odbiera token przez FabricHostBridge
+  4. getAccessToken() w mdmApi.ts zwraca ten token (priorytet nad MSAL)
+  5. Użytkownik nie widzi żadnego ekranu logowania
+```
+
+### Wdrożenie lokalne (DEV)
+
+```bash
+# 1. Uzupełnij WorkloadManifest.xml: __VITE_CLIENT_ID__ + __FRONTEND_URL__=https://localhost:3000
+
+# 2. Uruchom UI
+cd stewardship-ui && npm run dev
+
+# 3. Uruchom DevGateway (rejestruje workload w Fabric lokalnie)
+npm install -g @ms-fabric/workload-devgateway
+workload-devgateway start --manifest fabric/workload/BE/WorkloadManifest.xml
+
+# 4. W Fabric Portal: Settings → Admin → Developer features → włącz
+# 5. W workspace: + New item → MDM Stewardship
+```
+
+### Wdrożenie produkcyjne
+
+```powershell
+# 1. Zmień __FRONTEND_URL__ na URL Azure Static Web Apps
+# 2. Spakuj manifest
+Compress-Archive -Path fabric/workload/* -DestinationPath MDMStewardship.1.0.0.nupkg
+
+# 3. Fabric Admin Portal → Workloads → Upload workload → wgraj .nupkg
+# 4. Aktywuj workload dla tenanta
+```
+
+---
+
+## 9. Pierwsze uruchomienie
+
+### Krok 1 — Fabric Lakehouse
+
+W Fabric: utwórz Lakehouse o nazwie `lh_mdm`, a następnie w Notebook (SQL cell) uruchom DDL w kolejności:
+
+```sql
+-- Kolejność ma znaczenie (zależności między tabelami)
+-- 1.
+<zawartość fabric/lakehouse/ddl/mdm_config/create_mdm_config_tables.sql>
+-- 2.
+<zawartość fabric/lakehouse/ddl/bronze/create_bronze_tables.sql>
+-- 3.
+<zawartość fabric/lakehouse/ddl/silver_dv/create_silver_dv_tables.sql>
+-- 4.
+<zawartość fabric/lakehouse/ddl/gold/create_gold_tables.sql>
+-- 5.
+<zawartość fabric/lakehouse/seed/seed_mdm_config_location.sql>
+```
+
+### Krok 2 — Pierwsze ładowanie danych
+
+```
+Fabric Data Pipeline: PL_MDM_Master_Location
+Parametry: __paramFullLoad = true
+```
+
+### Krok 3 — UI lokalnie (mock mode)
+
+```bash
+cd stewardship-ui
+npm install
+# .env z VITE_MOCK_MODE=true już istnieje
+npm run dev
+# → http://localhost:3000
+```
+
+### Krok 4 — UI produkcyjnie
+
+```bash
+# 1. Azure Portal: utwórz Static Web App
+#    - repo: ten repo, branch: main, folder: stewardship-ui
+#    - skopiuj API token do GitHub Secrets: AZURE_STATIC_WEB_APPS_API_TOKEN
+
+# 2. GitHub Secrets (Settings → Secrets):
+VITE_FABRIC_SQL_ENDPOINT=https://...
+VITE_WRITE_API_URL=https://...
+VITE_TENANT_ID=<guid>
+VITE_CLIENT_ID=<guid>
+
+# 3. Push do main → GitHub Actions deploy automatycznie
+```
+
+---
+
+## 10. Wdrożenie produkcyjne
+
+### Checklist
+
+- [ ] Fabric Lakehouse `lh_mdm` — DDL + seed
+- [ ] Azure AD App Registration — redirect URI na prod URL + localhost:3000
+- [ ] Azure Function App — Managed Identity włączona
+- [ ] MSI rola **Contributor** w Fabric Workspace
+- [ ] GitHub Secrets — 4 VITE_* zmienne + AZURE_STATIC_WEB_APPS_API_TOKEN
+- [ ] Fabric Workload manifest — uzupełnione placeholdery + ikony PNG
+- [ ] `pip install jellyfish` w Fabric Environment (dla nb_match_location)
+- [ ] VNet Data Gateway lub Managed Private Endpoint — łączność do systemów źródłowych
+
+### Uwaga: Łączność Fabric → Źródła danych
+
+Istniejący ADF używa Self-Hosted Integration Runtime. Fabric wymaga jednego z:
+- **VNet Data Gateway** (zalecane — zarządzany przez Microsoft)
+- **Managed Private Endpoint** (w ramach Fabric Capacity)
+
+---
+
+## 11. Rozszerzanie systemu
+
+### Dodanie nowej encji (np. `item`, `employee`)
+
+```
+1. DDL
+   fabric/lakehouse/ddl/bronze/create_bronze_tables.sql     → dodaj bronze_item_*
+   fabric/lakehouse/ddl/silver_dv/create_silver_dv_tables.sql → hub_item + sat_item_*
+   fabric/lakehouse/ddl/gold/create_gold_tables.sql          → dim_item
+
+2. Config
+   fabric/lakehouse/seed/seed_mdm_config_item.sql
+   → INSERT entity_config (entity_id='item', ...)
+   → INSERT source_priority per pole
+   → INSERT field_config (match_weight, blocking_key)
+
+3. Notebooki
+   Skopiuj nb_*_location.py → nb_*_item.py
+   Zamień nazwy tabel (hub_location → hub_item, sat_location_* → sat_item_*)
+
+4. Pipeline
+   PL_MDM_Master_Location.json → PL_MDM_Master_Item.json
+   Zmień __paramEntityId = "item"
+
+5. UI
+   mdm.types.ts → dodaj ItemAttributes, GoldenItem
+   Notebooki dostarczą dane przez ten sam SQL Endpoint
+   ReviewQueue/GoldenViewer działają bez zmian (używają config-driven queries)
+```
+
+### Dodanie nowego źródła do istniejącej encji
+
+```
+1. Dodaj tabelę bronze_location_<source>.sql
+2. Dodaj sat_location_<source> do silver_dv DDL
+3. Dodaj Cell w nb_load_raw_vault_location.py (wzorzec: Cell 7 dla Yext)
+4. INSERT do mdm_config.source_priority (priorytet dla każdego pola)
+5. INSERT do mdm_config.hash_config (business_key_template)
+```
+
+---
+
+## 12. Wzorce i decyzje architektoniczne
+
+### Dlaczego Data Vault Lite (nie pełny DV ani płaskie tabele)?
+
+| Podejście | Pro | Con |
+|-----------|-----|-----|
+| Płaskie tabele | Proste | Brak historii; scalanie niszczy linię danych |
+| Pełny Data Vault | Kompletny | Links, Bridge tables — zbędne dla 1 encji |
+| **DV Lite (Hub + Sat)** | Historia + prostota | Brak Links (dodamy gdy potrzeba) |
+
+### Dlaczego SHA256 jako Hub key?
+
+- Deterministyczny: ten sam `"lightspeed|41839"` zawsze daje ten sam hash
+- Umożliwia MERGE bez sekwencji (Fabric Delta nie ma auto-increment)
+- Pozwala na `bv_location_key_resolution` bez FK — hash jest samowystarczalnym ID
+
+### Dlaczego Azure Function jako write proxy?
+
+Fabric SQL Endpoint obsługuje **tylko odczyt** przez REST. Zapis do Delta wymaga Spark lub SQL przez JDBC (Managed Identity). Azure Function z MSI = zapis bez haseł.
+
+### Wzorce z losadf/ zachowane w MDM
+
+| Wzorzec | Źródło w losadf/ | Implementacja w MDM |
+|---------|-----------------|---------------------|
+| `__param` naming | Wszystkie ADF pipelines | `__paramEntityId`, `__paramFullLoad` |
+| Logging framework | `PL_Master_Execution.json` | `mdm_config.execution_log` |
+| Error cascade | `PL_Data_ErrorReporting.json` | Error Handler w pipeline |
+| Watermark / incremental | `tblExtractionLog` | `mdm_config.source_watermark` |
+| Config-driven execution | `tblDwhMigrationTable` | `mdm_config.entity_config` |
+
