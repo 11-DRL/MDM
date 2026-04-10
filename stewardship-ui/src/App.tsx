@@ -1,7 +1,7 @@
 import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MsalProvider, AuthenticatedTemplate, UnauthenticatedTemplate } from '@azure/msal-react';
-import { msalInstance } from './api/mdmApi';
+import { msalInstance, MOCK_MODE } from './api/mdmApi';
 import { ReviewQueue } from './components/ReviewQueue/ReviewQueue';
 import { PairDetail } from './components/PairDetail/PairDetail';
 import { GoldenViewer } from './components/GoldenViewer/GoldenViewer';
@@ -75,6 +75,25 @@ function LoginPage() {
 }
 
 export default function App() {
+  // Mock mode: pomiń Azure AD — idealne do local dev bez konfiguracji
+  if (MOCK_MODE) {
+    return (
+      <QueryClientProvider client={queryClient}>
+        <BrowserRouter>
+          <Layout>
+            <Routes>
+              <Route path="/" element={<Navigate to="/queue" replace />} />
+              <Route path="/queue"            element={<ReviewQueue />} />
+              <Route path="/pairs/:pairId"    element={<PairDetail />} />
+              <Route path="/golden/:locationHk" element={<GoldenViewer />} />
+              <Route path="*" element={<Navigate to="/queue" replace />} />
+            </Routes>
+          </Layout>
+        </BrowserRouter>
+      </QueryClientProvider>
+    );
+  }
+
   return (
     <MsalProvider instance={msalInstance}>
       <QueryClientProvider client={queryClient}>

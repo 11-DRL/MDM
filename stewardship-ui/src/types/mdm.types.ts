@@ -38,6 +38,7 @@ export interface SatelliteLocation extends LocationAttributes {
   nameStd?: string;
   countryStd?: string;
   cityStd?: string;
+  completenessScore?: number;   // enriched by API, not a DV column
 }
 
 // ---------- Business Vault: Match Candidates ----------

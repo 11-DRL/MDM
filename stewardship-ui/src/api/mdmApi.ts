@@ -1,5 +1,7 @@
 // API client — komunikacja z Fabric SQL Analytics Endpoint + Azure Function write proxy
 // Auth: Azure AD (MSAL) — ten sam wzorzec co MSI w PL_sFTP_State_Manager.json
+// Mock mode: VITE_MOCK_MODE=true → omija Azure AD, używa lokalnych danych demo
+/// <reference types="vite/client" />
 
 import axios, { AxiosInstance } from 'axios';
 import { PublicClientApplication } from '@azure/msal-browser';
@@ -8,12 +10,14 @@ import type {
   StewardshipLogEntry, ReviewQueueStats, PairReviewAction,
   EntityConfig
 } from '../types/mdm.types';
+import { mockApi } from './mockData';
 
 // ---------- Konfiguracja (env vars w .env) ----------
-const FABRIC_SQL_ENDPOINT = import.meta.env.VITE_FABRIC_SQL_ENDPOINT;   // https://{workspace}.{region}.pbidedicated.windows.net
-const WRITE_API_URL       = import.meta.env.VITE_WRITE_API_URL;         // Azure Function URL
-const TENANT_ID           = import.meta.env.VITE_TENANT_ID;
-const CLIENT_ID           = import.meta.env.VITE_CLIENT_ID;
+export const MOCK_MODE = import.meta.env.VITE_MOCK_MODE === 'true';
+const FABRIC_SQL_ENDPOINT = import.meta.env.VITE_FABRIC_SQL_ENDPOINT;
+const WRITE_API_URL       = import.meta.env.VITE_WRITE_API_URL;
+const TENANT_ID           = import.meta.env.VITE_TENANT_ID  ?? 'mock-tenant';
+const CLIENT_ID           = import.meta.env.VITE_CLIENT_ID  ?? 'mock-client';
 
 // MSAL scope dla Fabric SQL Endpoint
 const FABRIC_SCOPE = 'https://analysis.windows.net/powerbi/api/.default';
@@ -59,6 +63,7 @@ async function createWriteClient(): Promise<AxiosInstance> {
 // ---------- Read: Review Queue ----------
 
 export async function getQueueStats(): Promise<ReviewQueueStats> {
+  if (MOCK_MODE) return mockApi.getQueueStats();
   const client = await createReadClient();
   const { data } = await client.get('/query', {
     params: {
@@ -82,6 +87,7 @@ export async function getMatchCandidates(
   pageSize = 20,
   status: 'pending' | 'all' = 'pending'
 ): Promise<MatchCandidatePage> {
+  if (MOCK_MODE) return mockApi.getMatchCandidates(page, pageSize, status);
   const client = await createReadClient();
   const statusFilter = status === 'all' ? '' : `WHERE mc.status = 'pending'`;
   const offset = (page - 1) * pageSize;
@@ -139,6 +145,7 @@ export async function getMatchCandidates(
 }
 
 export async function getGoldenLocation(locationHk: string): Promise<GoldenLocation> {
+  if (MOCK_MODE) return mockApi.getGoldenLocation(locationHk);
   const client = await createReadClient();
   const { data } = await client.get('/query', {
     params: {
@@ -149,6 +156,7 @@ export async function getGoldenLocation(locationHk: string): Promise<GoldenLocat
 }
 
 export async function getStewardshipLog(locationHk: string): Promise<StewardshipLogEntry[]> {
+  if (MOCK_MODE) return mockApi.getStewardshipLog(locationHk);
   const client = await createReadClient();
   const { data } = await client.get('/query', {
     params: {
@@ -166,6 +174,7 @@ export async function getStewardshipLog(locationHk: string): Promise<Stewardship
 // ---------- Write: Pair Review (through Azure Function proxy) ----------
 
 export async function submitPairReview(action: PairReviewAction): Promise<void> {
+  if (MOCK_MODE) { await mockApi.submitPairReview(action); return; }
   const client = await createWriteClient();
   await client.post('/api/mdm/location/review', action);
   // Azure Function wykona:
@@ -180,6 +189,7 @@ export async function overrideField(
   newValue: string,
   reason: string
 ): Promise<void> {
+  if (MOCK_MODE) { await mockApi.overrideField(locationHk, fieldName, newValue, reason); return; }
   const client = await createWriteClient();
   await client.post('/api/mdm/location/override', { locationHk, fieldName, newValue, reason });
 }
