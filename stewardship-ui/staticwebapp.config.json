@@ -21,7 +21,7 @@
   },
   "globalHeaders": {
     "X-Content-Type-Options": "nosniff",
-    "Content-Security-Policy": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src 'self' https://*.windows.net https://*.pbidedicated.windows.net https://*.azurewebsites.net https://login.microsoftonline.com; frame-ancestors https://app.fabric.microsoft.com https://msit.powerbi.com https://*.powerbi.com 'self'"
+    "Content-Security-Policy": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src 'self' https://*.windows.net https://*.datawarehouse.fabric.microsoft.com https://*.azurewebsites.net https://func-mdm-stewardship.azurewebsites.net https://login.microsoftonline.com; frame-ancestors https://app.fabric.microsoft.com https://msit.powerbi.com https://*.powerbi.com 'self'"
   },
   "mimeTypes": {
     ".json": "text/json"
