@@ -1,0 +1,48 @@
+name: Deploy to Microsoft Fabric
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'fabric/**'
+  workflow_dispatch:
+    inputs:
+      skip_seed:
+        description: 'Pomiń dane demo (production deploy)'
+        type: boolean
+        default: false
+
+jobs:
+  deploy_fabric:
+    runs-on: ubuntu-latest
+    name: Fabric Deploy
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy to Fabric (PowerShell)
+        shell: pwsh
+        env:
+          FABRIC_WORKSPACE_ID: ${{ secrets.FABRIC_WORKSPACE_ID }}
+          SKIP_SEED:           ${{ github.event.inputs.skip_seed }}
+        run: |
+          $skipFlag = if ($env:SKIP_SEED -eq 'true') { '-SkipSeed' } else { '' }
+          if ($skipFlag) {
+            .\deploy\deploy-fabric.ps1 -WorkspaceId $env:FABRIC_WORKSPACE_ID -SkipSeed
+          } else {
+            .\deploy\deploy-fabric.ps1 -WorkspaceId $env:FABRIC_WORKSPACE_ID
+          }
+
+      - name: Summary
+        run: |
+          echo "### ✅ Fabric Deploy Completed" >> $GITHUB_STEP_SUMMARY
+          echo "- Workspace: \`${{ secrets.FABRIC_WORKSPACE_ID }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Lakehouse: \`lh_mdm\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Triggered by: \`${{ github.actor }}\`" >> $GITHUB_STEP_SUMMARY
