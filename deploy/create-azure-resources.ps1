@@ -17,7 +17,8 @@
 #>
 
 Set-StrictMode -Version Latest
-$ErrorActionPreference = "Stop"
+# Używamy Continue — az.exe zwraca błędy jako stderr, nie jako PowerShell exceptions
+$ErrorActionPreference = "Continue"
 
 # ─── KONFIGURACJA ────────────────────────────────────────────────────────────
 $SUBSCRIPTION_ID = "077ce12c-c878-44cc-818d-f8f6723d1665"
@@ -27,27 +28,51 @@ $LOCATION        = "swedencentral"         # Function App + Storage
 $SWA_LOCATION    = "westeurope"            # Static Web Apps (ograniczone regiony)
 $APP_NAME        = "MDM Stewardship"       # Nazwa App Registration
 
-# Nazwy zasobów (zmień jeśli chcesz)
+# Nazwy zasobów
 $STORAGE_NAME    = "stmdmpoc077ce12c"      # max 24 znaków, tylko [a-z0-9]
 $FUNC_NAME       = "func-mdm-stewardship"
 $SWA_NAME        = "swa-mdm-stewardship"
 
-# ─── HELPER ──────────────────────────────────────────────────────────────────
-function Step([string]$msg) {
-    Write-Host "`n▶ $msg" -ForegroundColor Cyan
-}
-function OK([string]$msg) {
-    Write-Host "  ✓ $msg" -ForegroundColor Green
+# ─── HELPERS ─────────────────────────────────────────────────────────────────
+function Step([string]$msg) { Write-Host "`n▶ $msg" -ForegroundColor Cyan }
+function OK([string]$msg)   { Write-Host "  ✓ $msg" -ForegroundColor Green }
+function Fail([string]$msg) {
+    Write-Host "  ✗ BŁĄD: $msg" -ForegroundColor Red
+    Write-Host "  Zatrzymuję — popraw błąd i uruchom skrypt ponownie." -ForegroundColor Yellow
+    exit 1
 }
 function Info([string]$key, [string]$val) {
     Write-Host "  $key" -ForegroundColor Gray -NoNewline
     Write-Host " $val" -ForegroundColor Yellow
 }
 
-# ─── 0. Ustawienie subskrypcji ────────────────────────────────────────────────
+# Uruchamia az i zatrzymuje skrypt jeśli coś pójdzie nie tak
+function Invoke-Az {
+    param([string[]]$Arguments, [string]$ErrorMsg)
+    $output = az @Arguments 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        $details = ($output | Where-Object { "$_" -match "ERROR|Message|error" }) -join "`n"
+        Fail "$ErrorMsg`n    $details"
+    }
+    return $output
+}
+
+# ─── 0. Subskrypcja + rejestracja resource providerów ───────────────────────
 Step "Ustawianie subskrypcji..."
-az account set --subscription $SUBSCRIPTION_ID
+Invoke-Az @("account", "set", "--subscription", $SUBSCRIPTION_ID) `
+    -ErrorMsg "Nie można ustawić subskrypcji $SUBSCRIPTION_ID"
 OK "Subskrypcja: $SUBSCRIPTION_ID"
+
+Step "Rejestracja Microsoft.Web provider (wymagany przez Function App i SWA)..."
+$webState = (az provider show --namespace Microsoft.Web --query "registrationState" -o tsv 2>$null)
+if ($webState -ne "Registered") {
+    Write-Host "  Rejestrowanie Microsoft.Web — może potrwać 1-2 minuty..." -ForegroundColor Yellow
+    Invoke-Az @("provider", "register", "--namespace", "Microsoft.Web", "--wait") `
+        -ErrorMsg "Nie można zarejestrować Microsoft.Web provider"
+    OK "Microsoft.Web provider zarejestrowany"
+} else {
+    OK "Microsoft.Web provider już zarejestrowany"
+}
 
 # ─── 1. App Registration (Azure AD) ──────────────────────────────────────────
 Step "Tworzenie App Registration '$APP_NAME'..."
@@ -89,94 +114,113 @@ if ($storageExists) {
 
 # ─── 3. Azure Function App ────────────────────────────────────────────────────
 Step "Tworzenie Function App '$FUNC_NAME'..."
-$funcExists = az functionapp show --name $FUNC_NAME --resource-group $RESOURCE_GROUP 2>$null
+$funcExists = (az functionapp show --name $FUNC_NAME --resource-group $RESOURCE_GROUP --query "name" -o tsv 2>$null)
 if ($funcExists) {
     OK "Function App już istnieje"
 } else {
-    az functionapp create `
-        --name $FUNC_NAME `
-        --resource-group $RESOURCE_GROUP `
-        --consumption-plan-location $LOCATION `
-        --runtime node `
-        --runtime-version 20 `
-        --functions-version 4 `
-        --storage-account $STORAGE_NAME `
-        --assign-identity "[system]" | Out-Null
+    Invoke-Az @(
+        "functionapp", "create",
+        "--name", $FUNC_NAME,
+        "--resource-group", $RESOURCE_GROUP,
+        "--consumption-plan-location", $LOCATION,
+        "--runtime", "node",
+        "--runtime-version", "22",
+        "--functions-version", "4",
+        "--storage-account", $STORAGE_NAME,
+        "--assign-identity", "[system]"
+    ) -ErrorMsg "Nie można utworzyć Function App"
     OK "Function App '$FUNC_NAME' utworzony z Managed Identity"
 }
 
-# Pobierz Managed Identity Principal ID (potrzebny do roli w Fabric)
-$PRINCIPAL_ID = az functionapp identity show `
+# Pobierz Managed Identity Principal ID
+$PRINCIPAL_ID = (az functionapp identity show `
     --name $FUNC_NAME `
     --resource-group $RESOURCE_GROUP `
-    --query "principalId" -o tsv
+    --query "principalId" -o tsv 2>$null)
 OK "Managed Identity Principal ID: $PRINCIPAL_ID"
 
 # Pobierz URL Function App
-$FUNC_URL = "https://$(az functionapp show --name $FUNC_NAME --resource-group $RESOURCE_GROUP --query 'defaultHostName' -o tsv)"
-OK "Function App URL: $FUNC_URL"
-
-# Skonfiguruj CORS — zezwól na lokalny dev + SWA (dodamy pełny URL po kroku 4)
-az functionapp cors add `
+$FUNC_HOST = (az functionapp show `
     --name $FUNC_NAME `
     --resource-group $RESOURCE_GROUP `
-    --allowed-origins "http://localhost:3000" | Out-Null
+    --query "defaultHostName" -o tsv 2>$null)
+$FUNC_URL = "https://$FUNC_HOST"
+OK "Function App URL: $FUNC_URL"
+
+# CORS — localhost
+Invoke-Az @(
+    "functionapp", "cors", "add",
+    "--name", $FUNC_NAME,
+    "--resource-group", $RESOURCE_GROUP,
+    "--allowed-origins", "http://localhost:3000"
+) -ErrorMsg "Nie można dodać CORS"
 OK "CORS: localhost:3000 dodany"
 
 # ─── 4. Azure Static Web App ─────────────────────────────────────────────────
 Step "Tworzenie Static Web App '$SWA_NAME'..."
-$swaExists = az staticwebapp show --name $SWA_NAME --resource-group $RESOURCE_GROUP 2>$null
+$swaExists = (az staticwebapp show --name $SWA_NAME --resource-group $RESOURCE_GROUP --query "name" -o tsv 2>$null)
 if ($swaExists) {
     OK "Static Web App już istnieje"
 } else {
-    az staticwebapp create `
-        --name $SWA_NAME `
-        --resource-group $RESOURCE_GROUP `
-        --location $SWA_LOCATION `
-        --sku "Free" | Out-Null
+    Invoke-Az @(
+        "staticwebapp", "create",
+        "--name", $SWA_NAME,
+        "--resource-group", $RESOURCE_GROUP,
+        "--location", $SWA_LOCATION,
+        "--sku", "Free"
+    ) -ErrorMsg "Nie można utworzyć Static Web App"
     OK "Static Web App '$SWA_NAME' utworzony"
 }
 
 # Pobierz URL SWA
-$SWA_URL = "https://$(az staticwebapp show --name $SWA_NAME --resource-group $RESOURCE_GROUP --query 'defaultHostname' -o tsv)"
-OK "SWA URL: $SWA_URL"
-
-# Pobierz deployment token (do GitHub Actions)
-$DEPLOY_TOKEN = az staticwebapp secrets list `
+$SWA_HOST = (az staticwebapp show `
     --name $SWA_NAME `
     --resource-group $RESOURCE_GROUP `
-    --query "properties.apiKey" -o tsv
-OK "Deployment token pobrany (nie pokazuję — zapisz poniżej)"
+    --query "defaultHostname" -o tsv 2>$null)
+$SWA_URL = "https://$SWA_HOST"
+OK "SWA URL: $SWA_URL"
 
-# ─── 5. Dodaj SWA URL do App Registration redirect URIs ──────────────────────
+# Pobierz deployment token
+$DEPLOY_TOKEN = (az staticwebapp secrets list `
+    --name $SWA_NAME `
+    --resource-group $RESOURCE_GROUP `
+    --query "properties.apiKey" -o tsv 2>$null)
+OK "Deployment token pobrany"
+
+# ─── 5. Redirect URIs w App Registration ─────────────────────────────────────
 Step "Aktualizacja redirect URIs w App Registration..."
-az ad app update `
-    --id $CLIENT_ID `
-    --web-redirect-uris "http://localhost:3000" $SWA_URL | Out-Null
+Invoke-Az @(
+    "ad", "app", "update",
+    "--id", $CLIENT_ID,
+    "--web-redirect-uris", "http://localhost:3000", $SWA_URL
+) -ErrorMsg "Nie można zaktualizować redirect URIs"
 OK "Redirect URIs: localhost:3000 + $SWA_URL"
 
-# ─── 6. Dodaj SWA URL do CORS w Function App ─────────────────────────────────
-Step "Aktualizacja CORS w Function App..."
-az functionapp cors add `
-    --name $FUNC_NAME `
-    --resource-group $RESOURCE_GROUP `
-    --allowed-origins $SWA_URL | Out-Null
+# ─── 6. CORS w Function App — dodaj SWA URL ──────────────────────────────────
+Step "Aktualizacja CORS w Function App (dodaję SWA URL)..."
+Invoke-Az @(
+    "functionapp", "cors", "add",
+    "--name", $FUNC_NAME,
+    "--resource-group", $RESOURCE_GROUP,
+    "--allowed-origins", $SWA_URL
+) -ErrorMsg "Nie można dodać CORS dla SWA"
 OK "CORS: $SWA_URL dodany"
 
 # ─── 7. App Settings dla Function App ────────────────────────────────────────
 Step "Konfiguracja zmiennych środowiskowych Function App..."
-# FABRIC_SQL_SERVER zostanie uzupełniony po podaniu SQL Analytics Endpoint z Fabric
-az functionapp config appsettings set `
-    --name $FUNC_NAME `
-    --resource-group $RESOURCE_GROUP `
-    --settings `
-        "AZURE_TENANT_ID=$TENANT_ID" `
-        "VITE_CLIENT_ID=$CLIENT_ID" `
-        "ALLOWED_ORIGINS=$SWA_URL" `
-        "FABRIC_SQL_SERVER=__TODO_FILL_AFTER_FABRIC_SETUP__" | Out-Null
+Invoke-Az @(
+    "functionapp", "config", "appsettings", "set",
+    "--name", $FUNC_NAME,
+    "--resource-group", $RESOURCE_GROUP,
+    "--settings",
+    "AZURE_TENANT_ID=$TENANT_ID",
+    "VITE_CLIENT_ID=$CLIENT_ID",
+    "ALLOWED_ORIGINS=$SWA_URL",
+    "FABRIC_SQL_SERVER=__TODO_FILL_AFTER_FABRIC_SETUP__"
+) -ErrorMsg "Nie można ustawić App Settings"
 OK "App Settings zaktualizowane"
 
-# ─── 8. Zapisz wyniki do pliku .env.deploy ────────────────────────────────────
+# ─── 8. Zapisz wyniki ─────────────────────────────────────────────────────────
 Step "Zapisywanie wyników..."
 
 $envContent = @"
@@ -217,13 +261,12 @@ FABRIC_WORKSPACE_ID=<workspace-id>
 #    Zamień __FRONTEND_URL__  → SWA_URL
 #
 # 4. W Fabric Admin Portal:
-#    Nadaj Function App Managed Identity (PRINCIPAL_ID) rolę
-#    "Contributor" w workspace lh_mdm
+#    Nadaj Managed Identity (PRINCIPAL_ID) rolę Contributor w workspace
 #
 # 5. Wpisz FABRIC_SQL_SERVER do Function App settings:
-#    az functionapp config appsettings set \
-#      --name $FUNC_NAME \
-#      --resource-group $RESOURCE_GROUP \
+#    az functionapp config appsettings set
+#      --name func-mdm-stewardship
+#      --resource-group rg-fabric-poc-sdc
 #      --settings "FABRIC_SQL_SERVER=<endpoint>"
 # ============================================================
 "@
