@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   getMatchCandidates, getQueueStats, getGoldenLocation,
-  getStewardshipLog, submitPairReview, overrideField
+  getStewardshipLog, submitPairReview, overrideField, createLocation
 } from '../api/mdmApi';
 import type { PairReviewAction } from '../types/mdm.types';
 
@@ -66,6 +66,18 @@ export function useFieldOverride() {
     onSuccess: (_, vars) => {
       queryClient.invalidateQueries({ queryKey: ['golden-location', vars.locationHk] });
       queryClient.invalidateQueries({ queryKey: ['stewardship-log', vars.locationHk] });
+    },
+  });
+}
+
+// ---------- Create location ----------
+
+export function useCreateLocation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: import('../api/mdmApi').CreateLocationInput) => createLocation(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['queue-stats'] });
     },
   });
 }

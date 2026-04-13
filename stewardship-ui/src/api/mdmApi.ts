@@ -11,7 +11,7 @@ import type {
   StewardshipLogEntry, ReviewQueueStats, PairReviewAction,
   EntityConfig
 } from '../types/mdm.types';
-import { mockApi } from './mockData';
+import { mockApi, type CreateLocationInput } from './mockData';
 import { fabricHost } from '../lib/fabricHost';
 
 // ---------- Konfiguracja (env vars w .env) ----------
@@ -198,6 +198,20 @@ export async function overrideField(
   if (MOCK_MODE) { await mockApi.overrideField(locationHk, fieldName, newValue, reason); return; }
   const client = await createWriteClient();
   await client.post('/api/mdm/location/override', { locationHk, fieldName, newValue, reason });
+}
+
+// ---------- Write: Create Location ----------
+// Ręczne wprowadzenie nowej lokalizacji — omija pipeline, trafia prosto do Hub + Satellite + Gold
+
+export type { CreateLocationInput };
+
+export async function createLocation(
+  data: CreateLocationInput
+): Promise<{ locationHk: string }> {
+  if (MOCK_MODE) return mockApi.createLocation(data);
+  const client = await createWriteClient();
+  const { data: result } = await client.post('/api/mdm/location/create', data);
+  return result;
 }
 
 // ---------- Config ----------

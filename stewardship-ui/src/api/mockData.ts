@@ -423,4 +423,60 @@ export const mockApi = {
     });
     return { ok: true };
   },
+
+  createLocation: async (data: CreateLocationInput) => {
+    await delay(600);
+    const locationHk = `manual-${Date.now().toString(16)}`;
+    mockGoldenRecords[locationHk] = {
+      locationHk,
+      validFrom: new Date().toISOString(),
+      isCurrent: true,
+      name: data.name,
+      country: data.country,
+      city: data.city,
+      zipCode: data.zipCode,
+      address: data.address,
+      phone: data.phone,
+      websiteUrl: data.websiteUrl,
+      latitude: data.latitude,
+      longitude: data.longitude,
+      timezone: data.timezone,
+      currencyCode: data.currencyCode,
+      costCenter: data.costCenter,
+      region: data.region,
+      nameSource: 'manual' as any,
+      countrySource: 'manual' as any,
+      citySource: 'manual' as any,
+      completenessScore: [data.name, data.country, data.city, data.zipCode, data.phone, data.address].filter(Boolean).length / 6,
+      sourcesCount: 1,
+    };
+    mockStewardshipLog.unshift({
+      logId: `log-${Date.now()}`,
+      canonicalHk: locationHk,
+      action: 'manual_create',
+      changedBy: 'demo@losteria.com',
+      changedAt: new Date().toISOString(),
+      reason: `Ręczne dodanie: ${data.name}`,
+    });
+    localStats.totalGoldenRecords++;
+    return { ok: true, locationHk };
+  },
 };
+
+// Typ dla createLocation — eksportowany dla mdmApi.ts
+export interface CreateLocationInput {
+  name:          string;
+  country:       string;
+  city:          string;
+  zipCode?:      string;
+  address?:      string;
+  phone?:        string;
+  websiteUrl?:   string;
+  latitude?:     number;
+  longitude?:    number;
+  timezone?:     string;
+  currencyCode?: string;
+  costCenter?:   string;
+  region?:       string;
+  notes?:        string;
+}

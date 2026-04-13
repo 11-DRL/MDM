@@ -181,3 +181,38 @@ CREATE TABLE IF NOT EXISTS silver_dv.stewardship_log (
   pair_id          STRING,
   reason           STRING
 ) USING DELTA;
+
+-- ---------------------------------------------------------------------------
+-- SATELLITE: sat_location_manual
+-- Rekordy wprowadzone ręcznie przez stewardship UI (nie z systemów źródłowych)
+-- record_source = 'manual', priorytet survivorship = najwyższy (0) gdy is_golden=true
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS silver_dv.sat_location_manual (
+  location_hk      BINARY    NOT NULL,
+  load_date        TIMESTAMP NOT NULL,
+  load_end_date    TIMESTAMP,           -- NULL = aktualny rekord
+  hash_diff        BINARY    NOT NULL,
+  record_source    STRING    NOT NULL DEFAULT 'manual',
+  -- Atrybuty (identyczne pola co gold.dim_location)
+  name             STRING    NOT NULL,
+  country          STRING    NOT NULL,
+  city             STRING    NOT NULL,
+  zip_code         STRING,
+  address          STRING,
+  phone            STRING,
+  latitude         DOUBLE,
+  longitude        DOUBLE,
+  website_url      STRING,
+  timezone         STRING,
+  currency_code    STRING,
+  cost_center      STRING,
+  region           STRING,
+  notes            STRING,              -- dodatkowe uwagi stewarda
+  -- Standaryzowane (do matchingu)
+  name_std         STRING,
+  country_std      STRING,
+  city_std         STRING,
+  -- Metadane tworzenia
+  created_by       STRING    NOT NULL,
+  created_at       TIMESTAMP NOT NULL DEFAULT current_timestamp()
+) USING DELTA;

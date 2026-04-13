@@ -6,7 +6,8 @@ import { fabricHost } from './lib/fabricHost';
 import { ReviewQueue } from './components/ReviewQueue/ReviewQueue';
 import { PairDetail } from './components/PairDetail/PairDetail';
 import { GoldenViewer } from './components/GoldenViewer/GoldenViewer';
-import { LayoutDashboard, ListChecks, MapPin, Settings } from 'lucide-react';
+import { NewLocationForm } from './components/NewLocationForm/NewLocationForm';
+import { LayoutDashboard, ListChecks, MapPin, Settings, PlusCircle } from 'lucide-react';
 import { cn } from './lib/utils';
 
 const queryClient = new QueryClient({
@@ -47,6 +48,17 @@ function Layout({ children }: { children: React.ReactNode }) {
         <NavItem to="/queue"  label="Review Queue" icon={<ListChecks size={16} />} />
         <NavItem to="/golden" label="Golden Records" icon={<MapPin size={16} />} />
         <NavItem to="/config" label="Konfiguracja" icon={<Settings size={16} />} />
+        {/* Separator */}
+        <div className="mt-2 pt-2 border-t border-gray-100">
+          <NavLink to="/locations/new" className={({ isActive }) =>
+            cn("flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors",
+               isActive ? "bg-blue-50 text-blue-700 font-semibold"
+                        : "text-blue-600 hover:bg-blue-50 font-medium")
+          }>
+            <PlusCircle size={16} />
+            Nowa lokalizacja
+          </NavLink>
+        </div>
       </aside>
 
       {/* Main content */}
@@ -87,6 +99,7 @@ export default function App() {
               <Route path="/queue"              element={<ReviewQueue />} />
               <Route path="/pairs/:pairId"      element={<PairDetail />} />
               <Route path="/golden/:locationHk" element={<GoldenViewer />} />
+              <Route path="/locations/new"      element={<NewLocationForm />} />
               <Route path="*" element={<Navigate to="/queue" replace />} />
             </Routes>
           </Layout>
@@ -106,6 +119,7 @@ export default function App() {
               <Route path="/queue"              element={<ReviewQueue />} />
               <Route path="/pairs/:pairId"      element={<PairDetail />} />
               <Route path="/golden/:locationHk" element={<GoldenViewer />} />
+              <Route path="/locations/new"      element={<NewLocationForm />} />
               <Route path="*" element={<Navigate to="/queue" replace />} />
             </Routes>
           </Layout>
@@ -129,6 +143,7 @@ export default function App() {
                 <Route path="/queue"            element={<ReviewQueue />} />
                 <Route path="/pairs/:pairId"    element={<PairDetail />} />
                 <Route path="/golden/:locationHk" element={<GoldenViewer />} />
+                <Route path="/locations/new"    element={<NewLocationForm />} />
                 <Route path="*" element={<Navigate to="/queue" replace />} />
               </Routes>
             </Layout>
