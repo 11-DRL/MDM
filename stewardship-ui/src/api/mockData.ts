@@ -1,7 +1,7 @@
 // Mock data dla local dev — odpowiada realnym danym z Fabric Lakehouse
 import type {
   MatchCandidatePage, ReviewQueueStats, GoldenLocation,
-  StewardshipLogEntry, PairReviewAction
+  StewardshipLogEntry, PairReviewAction, FieldConfig, SourcePriorityConfig
 } from '../types/mdm.types';
 
 // ─── Stats ───────────────────────────────────────────────────────────────────
@@ -285,6 +285,45 @@ export const mockCandidates: MatchCandidatePage = {
   ],
 };
 
+// ─── Golden Records List ──────────────────────────────────────────────────────
+export const mockGoldenList: GoldenLocation[] = [
+  { locationHk: 'a1b2c3d4e5f6a1b2', validFrom: '2024-01-01T00:00:00Z', isCurrent: true, name: "L'Osteria München Marienplatz", city: 'München', country: 'DE', zipCode: '80331', completenessScore: 0.97, sourcesCount: 2 },
+  { locationHk: 'c3d4e5f6a1b2c3d4', validFrom: '2024-01-01T00:00:00Z', isCurrent: true, name: "L'Osteria Frankfurt Sachsenhausen", city: 'Frankfurt', country: 'DE', zipCode: '60594', completenessScore: 0.78, sourcesCount: 1 },
+  { locationHk: 'e5f6a1b2c3d4e5f6', validFrom: '2024-01-01T00:00:00Z', isCurrent: true, name: "L'Osteria Wien Naschmarkt", city: 'Wien', country: 'AT', zipCode: '1060', completenessScore: 0.91, sourcesCount: 2 },
+  { locationHk: 'a2b3c4d5e6f7a2b3', validFrom: '2024-01-01T00:00:00Z', isCurrent: true, name: "L'Osteria Hamburg Altona", city: 'Hamburg', country: 'DE', zipCode: '22765', completenessScore: 0.85, sourcesCount: 2 },
+  { locationHk: 'c4d5e6f7a2b3c4d5', validFrom: '2024-01-01T00:00:00Z', isCurrent: true, name: "L'Osteria Köln Rudolfplatz", city: 'Köln', country: 'DE', zipCode: '50674', completenessScore: 0.88, sourcesCount: 2 },
+  { locationHk: 'e6f7a2b3c4d5e6f7', validFrom: '2024-01-01T00:00:00Z', isCurrent: true, name: "L'Osteria Zürich Langstrasse", city: 'Zürich', country: 'CH', zipCode: '8004', completenessScore: 0.93, sourcesCount: 2 },
+  { locationHk: 'a3b4c5d6e7f8a3b4', validFrom: '2024-01-01T00:00:00Z', isCurrent: true, name: "L'Osteria Nürnberg Königstraße", city: 'Nürnberg', country: 'DE', zipCode: '90402', completenessScore: 0.76, sourcesCount: 2 },
+  { locationHk: 'b5c6d7e8f9a0b5c6', validFrom: '2024-01-01T00:00:00Z', isCurrent: true, name: "L'Osteria Berlin Mitte", city: 'Berlin', country: 'DE', zipCode: '10115', completenessScore: 0.95, sourcesCount: 3 },
+  { locationHk: 'c6d7e8f9a0b5c6d7', validFrom: '2024-01-01T00:00:00Z', isCurrent: true, name: "L'Osteria Stuttgart Stadtmitte", city: 'Stuttgart', country: 'DE', zipCode: '70173', completenessScore: 0.82, sourcesCount: 2 },
+  { locationHk: 'd7e8f9a0b5c6d7e8', validFrom: '2024-01-01T00:00:00Z', isCurrent: true, name: "L'Osteria Kraków Stare Miasto", city: 'Kraków', country: 'PL', zipCode: '31-001', completenessScore: 0.71, sourcesCount: 1 },
+];
+
+// ─── Config mock data ─────────────────────────────────────────────────────────
+export const mockFieldConfigs: FieldConfig[] = [
+  { entityId: 'business_location', fieldName: 'name',        matchWeight: 0.50, isBlockingKey: false, standardizer: 'uppercase_trim', isActive: true },
+  { entityId: 'business_location', fieldName: 'city',        matchWeight: 0.10, isBlockingKey: true,  standardizer: 'uppercase_trim', isActive: true },
+  { entityId: 'business_location', fieldName: 'country',     matchWeight: 0.10, isBlockingKey: true,  standardizer: 'iso_country',    isActive: true },
+  { entityId: 'business_location', fieldName: 'zip_code',    matchWeight: 0.30, isBlockingKey: false, standardizer: 'strip_spaces',   isActive: true },
+  { entityId: 'business_location', fieldName: 'latitude',    matchWeight: 0.20, isBlockingKey: false, standardizer: undefined,        isActive: true },
+  { entityId: 'business_location', fieldName: 'longitude',   matchWeight: 0.20, isBlockingKey: false, standardizer: undefined,        isActive: true },
+  { entityId: 'business_location', fieldName: 'phone',       matchWeight: 0.00, isBlockingKey: false, standardizer: undefined,        isActive: false },
+  { entityId: 'business_location', fieldName: 'website_url', matchWeight: 0.00, isBlockingKey: false, standardizer: undefined,        isActive: false },
+];
+
+export const mockSourcePriorities: SourcePriorityConfig[] = [
+  { entityId: 'business_location', sourceSystem: 'lightspeed', fieldName: '__default__', priority: 1 },
+  { entityId: 'business_location', sourceSystem: 'mcwin',      fieldName: '__default__', priority: 2 },
+  { entityId: 'business_location', sourceSystem: 'yext',       fieldName: '__default__', priority: 3 },
+  { entityId: 'business_location', sourceSystem: 'gopos',      fieldName: '__default__', priority: 4 },
+  { entityId: 'business_location', sourceSystem: 'yext',       fieldName: 'avg_rating',  priority: 1 },
+  { entityId: 'business_location', sourceSystem: 'yext',       fieldName: 'latitude',    priority: 1 },
+  { entityId: 'business_location', sourceSystem: 'yext',       fieldName: 'longitude',   priority: 1 },
+  { entityId: 'business_location', sourceSystem: 'yext',       fieldName: 'website_url', priority: 1 },
+  { entityId: 'business_location', sourceSystem: 'mcwin',      fieldName: 'cost_center', priority: 1 },
+  { entityId: 'business_location', sourceSystem: 'mcwin',      fieldName: 'region',      priority: 1 },
+];
+
 // ─── Golden Record ────────────────────────────────────────────────────────────
 export const mockGoldenRecords: Record<string, GoldenLocation> = {
   'a1b2c3d4e5f6a1b2': {
@@ -422,6 +461,23 @@ export const mockApi = {
       reason,
     });
     return { ok: true };
+  },
+
+  getGoldenLocations: async (page: number, pageSize: number) => {
+    await delay(400);
+    const start = (page - 1) * pageSize;
+    const items = mockGoldenList.slice(start, start + pageSize);
+    return { items, total: mockGoldenList.length, page, pageSize };
+  },
+
+  getFieldConfigs: async (_entityId: string): Promise<FieldConfig[]> => {
+    await delay(200);
+    return [...mockFieldConfigs];
+  },
+
+  getSourcePriorities: async (_entityId: string): Promise<SourcePriorityConfig[]> => {
+    await delay(200);
+    return [...mockSourcePriorities];
   },
 
   createLocation: async (data: CreateLocationInput) => {

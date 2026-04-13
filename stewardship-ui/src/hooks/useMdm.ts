@@ -1,7 +1,8 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  getMatchCandidates, getQueueStats, getGoldenLocation,
-  getStewardshipLog, submitPairReview, overrideField, createLocation
+  getMatchCandidates, getQueueStats, getGoldenLocation, getGoldenLocations,
+  getStewardshipLog, submitPairReview, overrideField, createLocation,
+  getFieldConfigs, getSourcePriorities,
 } from '../api/mdmApi';
 import type { PairReviewAction } from '../types/mdm.types';
 
@@ -78,6 +79,35 @@ export function useCreateLocation() {
     mutationFn: (data: import('../api/mdmApi').CreateLocationInput) => createLocation(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['queue-stats'] });
+      queryClient.invalidateQueries({ queryKey: ['golden-locations'] });
     },
+  });
+}
+
+// ---------- Golden locations list ----------
+
+export function useGoldenLocations(page = 1, pageSize = 25) {
+  return useQuery({
+    queryKey: ['golden-locations', page, pageSize],
+    queryFn: () => getGoldenLocations(page, pageSize),
+    placeholderData: (prev) => prev,
+  });
+}
+
+// ---------- Config tables ----------
+
+export function useFieldConfigs(entityId = 'business_location') {
+  return useQuery({
+    queryKey: ['field-configs', entityId],
+    queryFn: () => getFieldConfigs(entityId),
+    staleTime: 5 * 60_000,
+  });
+}
+
+export function useSourcePriorities(entityId = 'business_location') {
+  return useQuery({
+    queryKey: ['source-priorities', entityId],
+    queryFn: () => getSourcePriorities(entityId),
+    staleTime: 5 * 60_000,
   });
 }

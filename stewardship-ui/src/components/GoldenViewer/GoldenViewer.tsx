@@ -9,6 +9,7 @@ const SOURCE_COLORS: Record<MatchSource, string> = {
   yext:       'bg-purple-100 text-purple-700',
   mcwin:      'bg-green-100 text-green-700',
   gopos:      'bg-orange-100 text-orange-700',
+  manual:     'bg-gray-100 text-gray-600',
 };
 
 function SourceBadge({ source }: { source?: MatchSource | null }) {

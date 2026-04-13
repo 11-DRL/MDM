@@ -10,7 +10,30 @@ export interface HubLocation {
   recordSource: MatchSource;
 }
 
-export type MatchSource = 'lightspeed' | 'yext' | 'mcwin' | 'gopos';
+export interface FieldConfig {
+  entityId: string;
+  fieldName: string;
+  matchWeight: number;
+  isBlockingKey: boolean;
+  standardizer?: string;
+  isActive: boolean;
+}
+
+export interface SourcePriorityConfig {
+  entityId: string;
+  sourceSystem: string;
+  fieldName: string;
+  priority: number;
+}
+
+export interface GoldenLocationPage {
+  items: GoldenLocation[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export type MatchSource = 'lightspeed' | 'yext' | 'mcwin' | 'gopos' | 'manual';
 
 export interface LocationAttributes {
   name?: string;
@@ -127,7 +150,8 @@ export interface EntityConfig {
 }
 
 export interface SourcePriorityConfig {
-  sourceSystem: MatchSource;
+  entityId: string;
+  sourceSystem: string;
   fieldName: string;
   priority: number;
 }

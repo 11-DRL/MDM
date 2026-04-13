@@ -106,6 +106,21 @@ print(f"Candidates to match: {candidates.count()}")
 # Aliasy: left (wyższy priorytet), right (niższy priorytet)
 SOURCE_PRIORITY = {"lightspeed": 1, "mcwin": 2, "yext": 3, "gopos": 4}
 
+try:
+    _prio_df = spark.sql("""
+        SELECT source_system, priority
+        FROM mdm_config.source_priority
+        WHERE entity_id = 'business_location' AND field_name = '__default__'
+        ORDER BY priority
+    """).collect()
+    if _prio_df:
+        SOURCE_PRIORITY = {row["source_system"]: row["priority"] for row in _prio_df}
+        print(f"SOURCE_PRIORITY from config: {SOURCE_PRIORITY}")
+    else:
+        print("WARNING: source_priority config empty, using hardcoded defaults")
+except Exception as _e:
+    print(f"WARNING: could not read source_priority from config ({_e}), using hardcoded defaults")
+
 # UDF do porządkowania par (left = wyższy priorytet źródła)
 @F.udf(StringType())
 def source_priority_udf(src):

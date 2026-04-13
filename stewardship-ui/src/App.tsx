@@ -6,7 +6,9 @@ import { fabricHost } from './lib/fabricHost';
 import { ReviewQueue } from './components/ReviewQueue/ReviewQueue';
 import { PairDetail } from './components/PairDetail/PairDetail';
 import { GoldenViewer } from './components/GoldenViewer/GoldenViewer';
+import { GoldenList } from './components/GoldenList/GoldenList';
 import { NewLocationForm } from './components/NewLocationForm/NewLocationForm';
+import { ConfigViewer } from './components/ConfigViewer/ConfigViewer';
 import { LayoutDashboard, ListChecks, MapPin, Settings, PlusCircle } from 'lucide-react';
 import { cn } from './lib/utils';
 
@@ -98,7 +100,9 @@ export default function App() {
               <Route path="/" element={<Navigate to="/queue" replace />} />
               <Route path="/queue"              element={<ReviewQueue />} />
               <Route path="/pairs/:pairId"      element={<PairDetail />} />
+              <Route path="/golden"             element={<GoldenList />} />
               <Route path="/golden/:locationHk" element={<GoldenViewer />} />
+              <Route path="/config"             element={<ConfigViewer />} />
               <Route path="/locations/new"      element={<NewLocationForm />} />
               <Route path="*" element={<Navigate to="/queue" replace />} />
             </Routes>
@@ -118,7 +122,9 @@ export default function App() {
               <Route path="/" element={<Navigate to="/queue" replace />} />
               <Route path="/queue"              element={<ReviewQueue />} />
               <Route path="/pairs/:pairId"      element={<PairDetail />} />
+              <Route path="/golden"             element={<GoldenList />} />
               <Route path="/golden/:locationHk" element={<GoldenViewer />} />
+              <Route path="/config"             element={<ConfigViewer />} />
               <Route path="/locations/new"      element={<NewLocationForm />} />
               <Route path="*" element={<Navigate to="/queue" replace />} />
             </Routes>
@@ -142,7 +148,9 @@ export default function App() {
                 <Route path="/" element={<Navigate to="/queue" replace />} />
                 <Route path="/queue"            element={<ReviewQueue />} />
                 <Route path="/pairs/:pairId"    element={<PairDetail />} />
+                <Route path="/golden"           element={<GoldenList />} />
                 <Route path="/golden/:locationHk" element={<GoldenViewer />} />
+                <Route path="/config"           element={<ConfigViewer />} />
                 <Route path="/locations/new"    element={<NewLocationForm />} />
                 <Route path="*" element={<Navigate to="/queue" replace />} />
               </Routes>

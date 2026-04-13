@@ -223,3 +223,55 @@ export async function getEntityConfig(entityId = 'business_location'): Promise<E
   });
   return data[0];
 }
+
+export async function getGoldenLocations(
+  page = 1,
+  pageSize = 25
+): Promise<import('../types/mdm.types').GoldenLocationPage> {
+  if (MOCK_MODE) return mockApi.getGoldenLocations(page, pageSize);
+  const client = await createReadClient();
+  const offset = (page - 1) * pageSize;
+  const { data } = await client.get('/query', {
+    params: {
+      q: `
+        SELECT
+          CONVERT(VARCHAR(64), g.location_hk, 2)  AS locationHk,
+          g.name, g.country, g.city, g.zip_code    AS zipCode,
+          g.phone, g.website_url AS websiteUrl,
+          g.cost_center AS costCenter, g.region,
+          g.valid_from  AS validFrom, g.is_current  AS isCurrent,
+          g.name_source AS nameSource,
+          q.completeness_score AS completenessScore,
+          q.sources_count      AS sourcesCount
+        FROM gold.dim_location g
+        LEFT JOIN gold.dim_location_quality q
+          ON g.location_hk = q.location_hk
+        WHERE g.is_current = true
+        ORDER BY g.country, g.city, g.name
+        LIMIT ${pageSize} OFFSET ${offset}
+      `
+    }
+  });
+  const countRes = await client.get('/query', {
+    params: { q: `SELECT COUNT(*) AS total FROM gold.dim_location WHERE is_current = true` }
+  });
+  return { items: data, total: countRes.data[0].total, page, pageSize };
+}
+
+export async function getFieldConfigs(entityId = 'business_location'): Promise<import('../types/mdm.types').FieldConfig[]> {
+  if (MOCK_MODE) return mockApi.getFieldConfigs(entityId);
+  const client = await createReadClient();
+  const { data } = await client.get('/query', {
+    params: { q: `SELECT * FROM mdm_config.field_config WHERE entity_id = '${entityId}' ORDER BY field_name` }
+  });
+  return data;
+}
+
+export async function getSourcePriorities(entityId = 'business_location'): Promise<import('../types/mdm.types').SourcePriorityConfig[]> {
+  if (MOCK_MODE) return mockApi.getSourcePriorities(entityId);
+  const client = await createReadClient();
+  const { data } = await client.get('/query', {
+    params: { q: `SELECT * FROM mdm_config.source_priority WHERE entity_id = '${entityId}' ORDER BY field_name, priority` }
+  });
+  return data;
+}
