@@ -132,6 +132,7 @@ golden = spark.sql("""
         ys.country_code AS ys_country,
         ys.phone       AS ys_phone,
         ys.website_url AS ys_website,
+        ys.address_line1 AS ys_address,
         ys.latitude    AS ys_lat,
         ys.longitude   AS ys_lon,
         ys.avg_rating  AS ys_rating,
@@ -141,6 +142,7 @@ golden = spark.sql("""
         ms.city            AS ms_city,
         ms.zip_code        AS ms_zip,
         ms.country         AS ms_country,
+        ms.address         AS ms_address,
         ms.cost_center     AS ms_cost_center,
         ms.region          AS ms_region,
         -- GoPOS attributes
@@ -148,7 +150,8 @@ golden = spark.sql("""
         gs.city            AS gs_city,
         gs.zip_code        AS gs_zip,
         gs.country         AS gs_country,
-        gs.phone           AS gs_phone
+        gs.phone           AS gs_phone,
+        gs.address         AS gs_address
     FROM silver_dv.pit_location pit
     JOIN silver_dv.hub_location h ON pit.location_hk = h.location_hk
     LEFT JOIN silver_dv.sat_location_lightspeed ls
@@ -178,6 +181,7 @@ sat_aliases = {
         "country":     "ys_country",
         "phone":       "ys_phone",
         "website_url": "ys_website",
+        "address":     "ys_address",
         "latitude":    "ys_lat",
         "longitude":   "ys_lon",
     },
@@ -186,6 +190,7 @@ sat_aliases = {
         "city":        "ms_city",
         "zip_code":    "ms_zip",
         "country":     "ms_country",
+        "address":     "ms_address",
         "cost_center": "ms_cost_center",
         "region":      "ms_region",
     },
@@ -195,6 +200,7 @@ sat_aliases = {
         "zip_code": "gs_zip",
         "country":  "gs_country",
         "phone":    "gs_phone",
+        "address":  "gs_address",
     },
 }
 
@@ -214,6 +220,7 @@ golden_final = (
     .withColumn("review_count",  F.col("ys_reviews"))
     .withColumn("cost_center",   best_value("cost_center",   sat_aliases))
     .withColumn("region",        best_value("region",        sat_aliases))
+    .withColumn("address",       best_value("address",       sat_aliases))
     # Lineage: skąd pochodzi pole (config-driven)
     .withColumn("name_source",    best_source("name",    sat_aliases))
     .withColumn("country_source", best_source("country", sat_aliases))
@@ -242,7 +249,7 @@ golden_final = (
     .withColumn("updated_at", F.current_timestamp())
     .select(
         "location_hk", "valid_from", "valid_to", "is_current",
-        "name", "country", "city", "zip_code", "phone", "website_url",
+        "name", "country", "city", "zip_code", "address", "phone", "website_url",
         "latitude", "longitude", "timezone", "currency_code", "avg_rating",
         "review_count", "cost_center", "region",
         "name_source", "country_source", "city_source",

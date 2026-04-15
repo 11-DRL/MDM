@@ -37,6 +37,7 @@ jobs:
           VITE_WRITE_API_URL:       ${{ secrets.VITE_WRITE_API_URL }}
           VITE_TENANT_ID:           ${{ secrets.VITE_TENANT_ID }}
           VITE_CLIENT_ID:           ${{ secrets.VITE_CLIENT_ID }}
+          VITE_MOCK_MODE:           "false"
         run: npm run build
 
       - name: Deploy to Azure Static Web Apps

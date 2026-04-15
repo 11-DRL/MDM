@@ -1,0 +1,48 @@
+{
+  "name": "PL_MDM_ErrorReporting",
+  "properties": {
+    "description": "MDM Error Reporting pipeline. Called by PL_MDM_Master_Location on failure. Logs error details and sends Teams alert. Pattern: PL_Error_Handling (adf-master-dwh-dev-gwc).",
+    "activities": [
+      {
+        "name": "ACT_GEN_SPRC_LogError",
+        "type": "Script",
+        "dependsOn": [],
+        "typeProperties": {
+          "scripts": [
+            {
+              "type": "NonQuery",
+              "text": {
+                "value": "@concat('UPDATE mdm_config.execution_log SET status = ''Failed'', completed_at = current_timestamp(), error_message = ''Pipeline failed — see ADF monitor for details'' WHERE run_id = ''', pipeline().parameters.__paramMasterRunId, '''')",
+                "type": "Expression"
+              }
+            }
+          ]
+        },
+        "linkedServiceName": { "referenceName": "LS_Fabric_Lakehouse", "type": "LinkedServiceReference" }
+      },
+      {
+        "name": "ACT_GEN_WEB_SendErrorAlert",
+        "type": "WebActivity",
+        "dependsOn": [
+          { "activity": "ACT_GEN_SPRC_LogError", "dependencyConditions": ["Succeeded", "Failed"] }
+        ],
+        "typeProperties": {
+          "method": "POST",
+          "url": {
+            "value": "@pipeline().globalParameters.TeamsWebhookUrl",
+            "type": "Expression"
+          },
+          "body": {
+            "value": "@concat('{\"@type\": \"MessageCard\", \"@context\": \"http://schema.org/extensions\", \"themeColor\": \"FF0000\", \"summary\": \"MDM Pipeline Failed\", \"sections\": [{\"activityTitle\": \"⚠️ MDM Master Location Pipeline FAILED\", \"facts\": [{\"name\": \"Run ID\", \"value\": \"', pipeline().parameters.__paramMasterRunId, '\"}, {\"name\": \"Time\", \"value\": \"', utcnow(), '\"}], \"markdown\": true}]}')",
+            "type": "Expression"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "__paramMasterRunId": { "type": "string", "defaultValue": "" }
+    },
+    "folder": { "name": "MDM/Support" },
+    "annotations": ["mdm", "error-handling", "alerting"]
+  }
+}

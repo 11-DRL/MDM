@@ -57,11 +57,11 @@ $HEADERS = @{
 
 function Invoke-Fabric {
     param([string]$Method, [string]$Path, [object]$Body = $null)
-    $uri  = "$FABRIC_API$Path"
-    $args = @{ Method = $Method; Uri = $uri; Headers = $HEADERS }
-    if ($Body) { $args.Body = ($Body | ConvertTo-Json -Depth 20 -Compress) }
+    $uri   = "$FABRIC_API$Path"
+    $splat = @{ Method = $Method; Uri = $uri; Headers = $HEADERS }
+    if ($Body) { $splat.Body = ($Body | ConvertTo-Json -Depth 20 -Compress) }
     try {
-        return Invoke-RestMethod @args
+        return Invoke-RestMethod @splat
     } catch {
         $status = $_.Exception.Response.StatusCode.value__
         $msg    = $_.ErrorDetails.Message
@@ -213,97 +213,54 @@ OK "Wszystkie notebooki gotowe"
 
 # ─── 3. DDL — BOOTSTRAP ───────────────────────────────────────────────────────
 Step "Tworzenie tabel Delta (DDL bootstrap)..."
-
-# Tworzymy inline bootstrap notebook z DDL embedded
-$ddlFiles = @(
-    "mdm_config\create_mdm_config_tables.sql",
-    "bronze\create_bronze_tables.sql",
-    "silver_dv\create_silver_dv_tables.sql",
-    "gold\create_gold_tables.sql"
-)
-
-$ddlCells = @("# Bootstrap DDL — uruchom jednorazowo na pustym Lakehouse`nfrom pyspark.sql import functions as F`nprint('Starting DDL bootstrap...')")
-
-foreach ($rel in $ddlFiles) {
-    $sqlPath = Join-Path $REPO_ROOT "fabric\lakehouse\ddl\$rel"
-    $sql     = Get-Content $sqlPath -Raw -Encoding UTF8
-    # Zamień CREATE TABLE na spark.sql() — Spark SQL
-    $cell = "# DDL: $rel`n"
-    foreach ($stmt in ($sql -split ";\s*`n" | Where-Object { $_.Trim() -and $_ -notmatch "^--" })) {
-        $clean = $stmt.Trim()
-        if ($clean) {
-            $escaped = $clean -replace '"""', "'''"
-            $cell += "spark.sql(`"`"`"`n$escaped`n`"`"`")`n"
-        }
-    }
-    $cell += "print('OK: $rel')"
-    $ddlCells += $cell
-}
-
-$ddlCells += "print('✅ DDL bootstrap zakończony!')"
-
-# Buduj ipynb inline
-$cells = $ddlCells | ForEach-Object {
-    @{ cell_type = "code"; source = $_; metadata = @{ microsoft = @{ language = "python" } }; outputs = @(); execution_count = $null }
-}
-$ddlIpynb = @{
-    nbformat = 4; nbformat_minor = 5
-    metadata = @{
-        kernelspec    = @{ display_name = "Synapse PySpark"; language = "Python"; name = "synapse_pyspark" }
-        language_info = @{ name = "python" }
-        microsoft     = @{ default_lakehouse = @{ default_lakehouse_name = "lh_mdm" } }
-    }
-    cells = $cells
-}
-$ddlB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($ddlIpynb | ConvertTo-Json -Depth 20 -Compress)))
-
-$existing = (Invoke-Fabric GET "/workspaces/$WorkspaceId/notebooks").value | Where-Object { $_.displayName -eq "nb_bootstrap_ddl" }
-if ($existing) {
-    $ddlNbId = $existing.id
-    Invoke-Fabric POST "/workspaces/$WorkspaceId/notebooks/$ddlNbId/updateDefinition" -Body @{
-        definition = @{ format = "ipynb"; parts = @(@{ path = "notebook-content.ipynb"; payload = $ddlB64; payloadType = "InlineBase64" }) }
-    } | Out-Null
-} else {
-    $ddlNb   = Invoke-Fabric POST "/workspaces/$WorkspaceId/notebooks" -Body @{
-        displayName = "nb_bootstrap_ddl"
-        definition  = @{ format = "ipynb"; parts = @(@{ path = "notebook-content.ipynb"; payload = $ddlB64; payloadType = "InlineBase64" }) }
-    }
-    $ddlNbId = $ddlNb.id
-}
-OK "nb_bootstrap_ddl gotowy (id=$ddlNbId)"
-
+$ddlNbId = $NB_IDS["nb_bootstrap_ddl"]
 Run-Notebook -NotebookId $ddlNbId -Name "nb_bootstrap_ddl"
 
 # Seed MDM config
 Step "Seeding MDM config tables..."
-$seedConfigFile = Join-Path $REPO_ROOT "fabric\lakehouse\seed\seed_mdm_config_location.sql"
-$seedConfig = Get-Content $seedConfigFile -Raw -Encoding UTF8
-$configCells = @(
-    "from pyspark.sql import SparkSession`nprint('Seeding MDM config...')",
-    "# seed_mdm_config_location.sql`n" + ($seedConfig -split ";\s*`n" | Where-Object { $_.Trim() -and $_ -notmatch "^--" } | ForEach-Object {
-        "spark.sql(`"`"`"`n$($_.Trim())`n`"`"`")"
-    } | Out-String),
-    "print('✅ MDM config seed zakończony!')"
-)
-$configNbId = (Deploy-Notebook -Name "nb_seed_mdm_config" -PythonFile (New-TemporaryFile).FullName)
-# Przepisz z właściwymi cells
-$cfgCells = $configCells | ForEach-Object { @{ cell_type = "code"; source = $_; metadata = @{ microsoft = @{ language = "python" } }; outputs = @() } }
-$cfgIpynb = @{
-    nbformat = 4; nbformat_minor = 5
-    metadata = @{
-        kernelspec = @{ display_name = "Synapse PySpark"; language = "Python"; name = "synapse_pyspark" }
-        language_info = @{ name = "python" }
-        microsoft = @{ default_lakehouse = @{ default_lakehouse_name = "lh_mdm" } }
-    }
-    cells = $cfgCells
-}
-$cfgB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($cfgIpynb | ConvertTo-Json -Depth 20 -Compress)))
-$existingCfg = (Invoke-Fabric GET "/workspaces/$WorkspaceId/notebooks").value | Where-Object { $_.displayName -eq "nb_seed_mdm_config" }
-if ($existingCfg) { $configNbId = $existingCfg.id; Invoke-Fabric POST "/workspaces/$WorkspaceId/notebooks/$configNbId/updateDefinition" -Body @{ definition = @{ format = "ipynb"; parts = @(@{ path = "notebook-content.ipynb"; payload = $cfgB64; payloadType = "InlineBase64" }) } } | Out-Null }
-else { $cfgNb = Invoke-Fabric POST "/workspaces/$WorkspaceId/notebooks" -Body @{ displayName = "nb_seed_mdm_config"; definition = @{ format = "ipynb"; parts = @(@{ path = "notebook-content.ipynb"; payload = $cfgB64; payloadType = "InlineBase64" }) } }; $configNbId = $cfgNb.id }
+$configNbId = $NB_IDS["nb_seed_mdm_config"]
 Run-Notebook -NotebookId $configNbId -Name "nb_seed_mdm_config"
 
-# ─── 4. SEED DEMO DATA ────────────────────────────────────────────────────────
+# ─── 4. PIPELINES ─────────────────────────────────────────────────────────────
+Step "Upload Data Pipelines do Fabric workspace..."
+
+function Deploy-Pipeline {
+    param([string]$Name, [string]$JsonFile)
+
+    $content = Get-Content $JsonFile -Raw -Encoding UTF8
+    $b64     = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($content))
+
+    $existing = (Invoke-Fabric GET "/workspaces/$WorkspaceId/dataPipelines").value `
+        | Where-Object { $_.displayName -eq $Name }
+
+    if ($existing) {
+        Invoke-Fabric POST "/workspaces/$WorkspaceId/dataPipelines/$($existing.id)/updateDefinition" -Body @{
+            definition = @{
+                parts = @(@{ path = "pipeline-content.json"; payload = $b64; payloadType = "InlineBase64" })
+            }
+        } | Out-Null
+        OK "Pipeline zaktualizowany: $Name"
+        return $existing.id
+    } else {
+        $result = Invoke-Fabric POST "/workspaces/$WorkspaceId/dataPipelines" -Body @{
+            displayName = $Name
+            definition  = @{
+                parts = @(@{ path = "pipeline-content.json"; payload = $b64; payloadType = "InlineBase64" })
+            }
+        }
+        OK "Pipeline utworzony: $Name (id=$($result.id))"
+        return $result.id
+    }
+}
+
+$pipelineDir = Join-Path $REPO_ROOT "fabric\pipelines"
+foreach ($file in Get-ChildItem $pipelineDir -Filter "*.json") {
+    $pName = [System.IO.Path]::GetFileNameWithoutExtension($file.Name)
+    Deploy-Pipeline -Name $pName -JsonFile $file.FullName
+}
+OK "Wszystkie pipelines gotowe"
+
+# ─── 5. SEED DEMO DATA ────────────────────────────────────────────────────────
 if (-not $SkipSeed) {
     Step "Ładowanie danych demo (20 lokalizacji L'Osteria)..."
     Run-Notebook -NotebookId $NB_IDS["nb_seed_demo_data"] -Name "nb_seed_demo_data"
