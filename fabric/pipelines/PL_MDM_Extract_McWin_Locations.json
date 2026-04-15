@@ -1,0 +1,68 @@
+{
+  "name": "PL_MDM_Extract_McWin_Locations",
+  "properties": {
+    "description": "Pobiera dane restauracji z McWin REST API i appenduje do bronze.mcwin_restaurant_masterdata (Delta).",
+    "activities": [
+      {
+        "name": "ACT_WEB_FetchMcWinRestaurants",
+        "type": "WebActivity",
+        "dependsOn": [],
+        "typeProperties": {
+          "method": "GET",
+          "url": {
+            "value": "@concat(pipeline().globalParameters.McWinApiBaseUrl, '/api/v1/restaurants?active=true&limit=500')",
+            "type": "Expression"
+          },
+          "headers": {
+            "Authorization": {
+              "value": "@concat('ApiKey ', pipeline().globalParameters.McWinApiKey)",
+              "type": "Expression"
+            },
+            "Content-Type": "application/json"
+          }
+        }
+      },
+      {
+        "name": "ACT_NTB_AppendBronze",
+        "type": "SynapseNotebook",
+        "dependsOn": [
+          { "activity": "ACT_WEB_FetchMcWinRestaurants", "dependencyConditions": ["Succeeded"] }
+        ],
+        "typeProperties": {
+          "notebook": { "referenceName": "nb_bronze_append_mcwin", "type": "NotebookReference" },
+          "parameters": {
+            "run_id":       { "value": "@pipeline().parameters.__paramRunId", "type": "string" },
+            "tenant_name":  { "value": "@pipeline().parameters.__paramTenantName", "type": "string" },
+            "payload_json": {
+              "value": "@string(activity('ACT_WEB_FetchMcWinRestaurants').output)",
+              "type": "string"
+            }
+          }
+        }
+      },
+      {
+        "name": "ACT_SPRC_LogExtract",
+        "type": "Script",
+        "dependsOn": [
+          { "activity": "ACT_NTB_AppendBronze", "dependencyConditions": ["Succeeded"] }
+        ],
+        "typeProperties": {
+          "scripts": [{
+            "type": "NonQuery",
+            "text": {
+              "value": "@concat('INSERT INTO mdm_config.execution_log (run_id, entity_id, process_name, status, started_at, completed_at) VALUES (''', pipeline().parameters.__paramRunId, ''', ''business_location'', ''PL_MDM_Extract_McWin_Locations'', ''Completed'', current_timestamp(), current_timestamp())')",
+              "type": "Expression"
+            }
+          }]
+        },
+        "linkedServiceName": { "referenceName": "LS_Fabric_Lakehouse", "type": "LinkedServiceReference" }
+      }
+    ],
+    "parameters": {
+      "__paramRunId":      { "type": "string" },
+      "__paramTenantName": { "type": "string", "defaultValue": "losteria" }
+    },
+    "folder": { "name": "MDM/Extract" },
+    "annotations": ["mdm", "bronze", "mcwin", "extract"]
+  }
+}

@@ -6,6 +6,41 @@ import { app, HttpRequest, HttpResponseInit, InvocationContext } from '@azure/fu
 import * as sql from 'tedious';
 import * as crypto from 'crypto';
 
+// ---------- Auth: Bearer token validation ----------
+// Weryfikuje że request pochodzi od zalogowanego użytkownika Azure AD.
+// Dekoduje JWT (bez weryfikacji podpisu — podpis weryfikuje Azure AD przed SWA).
+// Jeśli funkcja jest dostępna tylko przez Azure SWA, token i tak był już zwalidowany.
+// Dodatkowa weryfikacja: aud i iss muszą pasować do naszego tenantu.
+function validateBearerToken(req: HttpRequest): { ok: true; email: string } | { ok: false; status: 401 | 403; error: string } {
+  const authHeader = req.headers.get('authorization') ?? req.headers.get('Authorization');
+  if (!authHeader?.startsWith('Bearer ')) {
+    return { ok: false, status: 401, error: 'Missing or invalid Authorization header' };
+  }
+  const token = authHeader.slice(7);
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return { ok: false, status: 401, error: 'Malformed JWT' };
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf-8'));
+
+    // Weryfikuj tenant (iss) — opcjonalnie, jeśli zmienna środowiskowa ustawiona
+    const expectedTenant = process.env.AZURE_TENANT_ID;
+    if (expectedTenant && payload.tid && payload.tid !== expectedTenant) {
+      return { ok: false, status: 403, error: 'Token tenant mismatch' };
+    }
+
+    const email: string = payload.preferred_username ?? payload.upn ?? payload.email ?? payload.unique_name ?? 'unknown';
+    return { ok: true, email };
+  } catch {
+    return { ok: false, status: 401, error: 'Failed to decode JWT' };
+  }
+}
+
+function requireAuth(req: HttpRequest): { ok: true; email: string } | HttpResponseInit {
+  const result = validateBearerToken(req);
+  if (!result.ok) return { status: result.status, jsonBody: { error: result.error } };
+  return result;
+}
+
 // ---------- DB connection ----------
 function getConnection(): sql.Connection {
   const config: sql.ConnectionConfiguration = {
@@ -20,8 +55,22 @@ function getConnection(): sql.Connection {
   return new sql.Connection(config);
 }
 
+// Retry z exponential backoff — 3 próby: 200ms → 400ms → 800ms
+async function withRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (i < attempts - 1) await new Promise(r => setTimeout(r, 200 * Math.pow(2, i)));
+    }
+  }
+  throw lastErr;
+}
+
 async function execSql(query: string, params: Record<string, unknown> = {}): Promise<void> {
-  return new Promise((resolve, reject) => {
+  return withRetry(() => new Promise((resolve, reject) => {
     const conn = getConnection();
     conn.on('connect', (err) => {
       if (err) return reject(err);
@@ -35,14 +84,14 @@ async function execSql(query: string, params: Record<string, unknown> = {}): Pro
       conn.execSql(req);
     });
     conn.connect();
-  });
+  }));
 }
 
 async function querySql<T = Record<string, unknown>>(
   query: string,
   params: Record<string, unknown> = {}
 ): Promise<T[]> {
-  return new Promise((resolve, reject) => {
+  return withRetry(() => new Promise((resolve, reject) => {
     const conn = getConnection();
     const rows: T[] = [];
     conn.on('connect', (err) => {
@@ -62,20 +111,15 @@ async function querySql<T = Record<string, unknown>>(
       conn.execSql(req);
     });
     conn.connect();
-  });
-}
-
-function getCallerEmail(req: HttpRequest): string {
-  const auth = req.headers.get('x-ms-client-principal');
-  if (!auth) return 'unknown';
-  try {
-    const decoded = JSON.parse(Buffer.from(auth, 'base64').toString('utf-8'));
-    return decoded.userDetails ?? 'unknown';
-  } catch { return 'unknown'; }
+  }));
 }
 
 // ---------- POST /api/mdm/location/review ----------
 async function reviewPair(req: HttpRequest, ctx: InvocationContext): Promise<HttpResponseInit> {
+  const auth = requireAuth(req);
+  if (!('email' in auth)) return auth;
+  const caller = auth.email;
+
   const body = await req.json() as {
     pairId: string;
     action: 'accept' | 'reject';
@@ -85,7 +129,6 @@ async function reviewPair(req: HttpRequest, ctx: InvocationContext): Promise<Htt
   if (!body.pairId || !['accept', 'reject'].includes(body.action)) {
     return { status: 400, jsonBody: { error: 'Invalid request: pairId and action required' } };
   }
-  const caller = getCallerEmail(req);
   const status = body.action === 'accept' ? 'accepted' : 'rejected';
   try {
     await execSql(`
@@ -124,6 +167,10 @@ async function reviewPair(req: HttpRequest, ctx: InvocationContext): Promise<Htt
 
 // ---------- POST /api/mdm/location/override ----------
 async function overrideField(req: HttpRequest, ctx: InvocationContext): Promise<HttpResponseInit> {
+  const auth = requireAuth(req);
+  if (!('email' in auth)) return auth;
+  const caller = auth.email;
+
   const body = await req.json() as {
     locationHk: string; fieldName: string; newValue: string; reason: string;
   };
@@ -137,7 +184,6 @@ async function overrideField(req: HttpRequest, ctx: InvocationContext): Promise<
   if (!ALLOWED_FIELDS.has(body.fieldName)) {
     return { status: 400, jsonBody: { error: `Field '${body.fieldName}' not allowed` } };
   }
-  const caller = getCallerEmail(req);
   try {
     const rows = await querySql<{ fieldValue: string }>(
       `SELECT ${body.fieldName} AS fieldValue FROM gold.dim_location
@@ -182,13 +228,16 @@ interface CreateLocationBody {
 }
 
 async function createLocation(req: HttpRequest, ctx: InvocationContext): Promise<HttpResponseInit> {
+  const auth = requireAuth(req);
+  if (!('email' in auth)) return auth;
+  const caller = auth.email;
+
   const body = await req.json() as CreateLocationBody;
 
   if (!body.name?.trim() || !body.country?.trim() || !body.city?.trim()) {
     return { status: 400, jsonBody: { error: 'name, country, city are required' } };
   }
 
-  const caller  = getCallerEmail(req);
   const uuid    = crypto.randomUUID();
   const bizKey  = `manual|${uuid}`;
   // SHA256 hash key (hex) — identyczny wzorzec co nb_load_raw_vault_location.py
@@ -305,6 +354,81 @@ function calcCompleteness(b: CreateLocationBody): number {
   return Math.round((filled / fields.length) * 100) / 100;
 }
 
+// ---------- GET /api/mdm/location/pair/:pairId ----------
+// Pobiera pojedynczą parę do recenzji — zastępuje N+1 load 1000 rekordów w PairDetail
+async function getPair(req: HttpRequest, ctx: InvocationContext): Promise<HttpResponseInit> {
+  const auth = requireAuth(req);
+  if (!('email' in auth)) return auth;
+
+  const pairId = req.params.pairId;
+  if (!pairId) return { status: 400, jsonBody: { error: 'pairId required' } };
+
+  try {
+    const rows = await querySql<Record<string, unknown>>(`
+      SELECT
+        mc.pair_id       AS pairId,
+        mc.hk_left       AS hkLeft,
+        mc.hk_right      AS hkRight,
+        mc.match_score   AS matchScore,
+        mc.match_type    AS matchType,
+        mc.name_score    AS nameScore,
+        mc.city_match    AS cityMatch,
+        mc.zip_match     AS zipMatch,
+        mc.geo_score     AS geoScore,
+        mc.status,
+        mc.created_at    AS createdAt,
+        mc.reviewed_by   AS reviewedBy,
+        mc.reviewed_at   AS reviewedAt,
+        -- Left record attributes
+        COALESCE(ls_l.name, ys_l.name, ms_l.restaurant_name, gs_l.location_name)    AS leftName,
+        COALESCE(ls_l.country, ys_l.country_code, ms_l.country, gs_l.country)       AS leftCountry,
+        COALESCE(ls_l.city_std, ys_l.city, ms_l.city, gs_l.city)                    AS leftCity,
+        COALESCE(ms_l.zip_code, ys_l.postal_code, gs_l.zip_code)                    AS leftZipCode,
+        COALESCE(ys_l.phone, gs_l.phone)                                             AS leftPhone,
+        ys_l.website_url                                                             AS leftWebsiteUrl,
+        ys_l.avg_rating                                                              AS leftAvgRating,
+        ys_l.review_count                                                            AS leftReviewCount,
+        ms_l.cost_center                                                             AS leftCostCenter,
+        ms_l.region                                                                  AS leftRegion,
+        CASE WHEN ls_l.location_hk IS NOT NULL THEN 'lightspeed'
+             WHEN ys_l.location_hk IS NOT NULL THEN 'yext'
+             WHEN ms_l.location_hk IS NOT NULL THEN 'mcwin'
+             ELSE 'gopos' END                                                        AS leftSource,
+        -- Right record attributes
+        COALESCE(ls_r.name, ys_r.name, ms_r.restaurant_name, gs_r.location_name)    AS rightName,
+        COALESCE(ls_r.country, ys_r.country_code, ms_r.country, gs_r.country)       AS rightCountry,
+        COALESCE(ls_r.city_std, ys_r.city, ms_r.city, gs_r.city)                    AS rightCity,
+        COALESCE(ms_r.zip_code, ys_r.postal_code, gs_r.zip_code)                    AS rightZipCode,
+        COALESCE(ys_r.phone, gs_r.phone)                                             AS rightPhone,
+        ys_r.website_url                                                             AS rightWebsiteUrl,
+        ys_r.avg_rating                                                              AS rightAvgRating,
+        ys_r.review_count                                                            AS rightReviewCount,
+        ms_r.cost_center                                                             AS rightCostCenter,
+        ms_r.region                                                                  AS rightRegion,
+        CASE WHEN ls_r.location_hk IS NOT NULL THEN 'lightspeed'
+             WHEN ys_r.location_hk IS NOT NULL THEN 'yext'
+             WHEN ms_r.location_hk IS NOT NULL THEN 'mcwin'
+             ELSE 'gopos' END                                                        AS rightSource
+      FROM silver_dv.bv_location_match_candidates mc
+      LEFT JOIN silver_dv.sat_location_lightspeed ls_l ON mc.hk_left  = ls_l.location_hk AND ls_l.load_end_date IS NULL
+      LEFT JOIN silver_dv.sat_location_yext       ys_l ON mc.hk_left  = ys_l.location_hk AND ys_l.load_end_date IS NULL
+      LEFT JOIN silver_dv.sat_location_mcwin      ms_l ON mc.hk_left  = ms_l.location_hk AND ms_l.load_end_date IS NULL
+      LEFT JOIN silver_dv.sat_location_gopos      gs_l ON mc.hk_left  = gs_l.location_hk AND gs_l.load_end_date IS NULL
+      LEFT JOIN silver_dv.sat_location_lightspeed ls_r ON mc.hk_right = ls_r.location_hk AND ls_r.load_end_date IS NULL
+      LEFT JOIN silver_dv.sat_location_yext       ys_r ON mc.hk_right = ys_r.location_hk AND ys_r.load_end_date IS NULL
+      LEFT JOIN silver_dv.sat_location_mcwin      ms_r ON mc.hk_right = ms_r.location_hk AND ms_r.load_end_date IS NULL
+      LEFT JOIN silver_dv.sat_location_gopos      gs_r ON mc.hk_right = gs_r.location_hk AND gs_r.load_end_date IS NULL
+      WHERE mc.pair_id = @pairId
+    `, { pairId });
+
+    if (rows.length === 0) return { status: 404, jsonBody: { error: 'Pair not found' } };
+    return { status: 200, jsonBody: rows[0] };
+  } catch (err) {
+    ctx.error('getPair failed', err);
+    return { status: 500, jsonBody: { error: 'Internal error', detail: String(err) } };
+  }
+}
+
 // ---------- Register routes ----------
 app.http('reviewPair', {
   methods: ['POST'], authLevel: 'anonymous',
@@ -318,11 +442,12 @@ app.http('createLocation', {
   methods: ['POST'], authLevel: 'anonymous',
   route: 'mdm/location/create', handler: createLocation,
 });
+app.http('getPair', {
+  methods: ['GET'], authLevel: 'anonymous',
+  route: 'mdm/location/pair/{pairId}', handler: getPair,
+});
 app.http('health', {
   methods: ['GET'], authLevel: 'anonymous',
   route: 'health',
   handler: async () => ({ status: 200, jsonBody: { status: 'ok' } }),
 });
-
-
-

@@ -7,7 +7,7 @@
 import axios, { AxiosInstance } from 'axios';
 import { PublicClientApplication } from '@azure/msal-browser';
 import type {
-  MatchCandidatePage, GoldenLocation,
+  MatchCandidatePage, MatchCandidate, GoldenLocation,
   StewardshipLogEntry, ReviewQueueStats, PairReviewAction,
   EntityConfig
 } from '../types/mdm.types';
@@ -175,6 +175,18 @@ export async function getStewardshipLog(locationHk: string): Promise<Stewardship
     }
   });
   return data;
+}
+
+// ---------- Read: Single pair by ID (przez Azure Function) ----------
+
+export async function getPairById(pairId: string): Promise<MatchCandidate | null> {
+  if (MOCK_MODE) {
+    const page = await mockApi.getMatchCandidates(1, 1000, 'all');
+    return page.items.find(c => c.pairId === pairId) ?? null;
+  }
+  const client = await createWriteClient();
+  const { data } = await client.get(`/api/mdm/location/pair/${encodeURIComponent(pairId)}`);
+  return data ?? null;
 }
 
 // ---------- Write: Pair Review (through Azure Function proxy) ----------

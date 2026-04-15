@@ -161,44 +161,63 @@ golden = spark.sql("""
         ON pit.location_hk = gs.location_hk AND gs.load_date = pit.sat_gopos_ld
 """)
 
-# Survivorship (COALESCE w kolejności priorytetu)
+# Survivorship (config-driven via best_value / best_source helpers)
+# Mapuje aliasy kolumn satellite na nazwy pól — używane przez best_value() i best_source()
+sat_aliases = {
+    "lightspeed": {
+        "name":          "ls_name",
+        "city":          "ls_city",
+        "country":       "ls_country",
+        "timezone":      "ls_timezone",
+        "currency_code": "ls_currency_code",
+    },
+    "yext": {
+        "name":        "ys_name",
+        "city":        "ys_city",
+        "zip_code":    "ys_zip",
+        "country":     "ys_country",
+        "phone":       "ys_phone",
+        "website_url": "ys_website",
+        "latitude":    "ys_lat",
+        "longitude":   "ys_lon",
+    },
+    "mcwin": {
+        "name":        "ms_name",
+        "city":        "ms_city",
+        "zip_code":    "ms_zip",
+        "country":     "ms_country",
+        "cost_center": "ms_cost_center",
+        "region":      "ms_region",
+    },
+    "gopos": {
+        "name":     "gs_name",
+        "city":     "gs_city",
+        "zip_code": "gs_zip",
+        "country":  "gs_country",
+        "phone":    "gs_phone",
+    },
+}
+
 golden_final = (
     golden
-    .withColumn("name",
-        F.coalesce(F.col("ls_name"), F.col("ms_name"), F.col("ys_name"), F.col("gs_name")))
-    .withColumn("city",
-        F.coalesce(F.col("ls_city"), F.col("ms_city"), F.col("ys_city"), F.col("gs_city")))
-    .withColumn("zip_code",
-        F.coalesce(F.col("ms_zip"), F.col("ys_zip"), F.col("gs_zip")))
-    .withColumn("country",
-        F.coalesce(F.col("ls_country"), F.col("ms_country"), F.col("ys_country"), F.col("gs_country")))
-    .withColumn("phone",
-        F.coalesce(F.col("ys_phone"), F.col("gs_phone")))
-    .withColumn("latitude",     F.col("ys_lat"))
-    .withColumn("longitude",    F.col("ys_lon"))
-    .withColumn("website_url",  F.col("ys_website"))
-    .withColumn("timezone",     F.col("ls_timezone"))
-    .withColumn("currency_code",F.col("ls_currency_code"))
-    .withColumn("avg_rating",   F.col("ys_rating"))
-    .withColumn("review_count", F.col("ys_reviews"))
-    .withColumn("cost_center",  F.col("ms_cost_center"))
-    .withColumn("region",       F.col("ms_region"))
-    # Lineage: skąd pochodzi pole
-    .withColumn("name_source",
-        F.when(F.col("ls_name").isNotNull(), F.lit("lightspeed"))
-         .when(F.col("ms_name").isNotNull(), F.lit("mcwin"))
-         .when(F.col("ys_name").isNotNull(), F.lit("yext"))
-         .when(F.col("gs_name").isNotNull(), F.lit("gopos"))
-         .otherwise(F.lit(None)))
-    .withColumn("country_source",
-        F.when(F.col("ls_country").isNotNull(), F.lit("lightspeed"))
-         .when(F.col("ms_country").isNotNull(), F.lit("mcwin"))
-         .otherwise(F.lit("yext")))
-    .withColumn("city_source",
-        F.when(F.col("ls_city").isNotNull(), F.lit("lightspeed"))
-         .when(F.col("ms_city").isNotNull(), F.lit("mcwin"))
-         .when(F.col("ys_city").isNotNull(), F.lit("yext"))
-         .otherwise(F.lit("gopos")))
+    .withColumn("name",          best_value("name",          sat_aliases))
+    .withColumn("city",          best_value("city",          sat_aliases))
+    .withColumn("zip_code",      best_value("zip_code",      sat_aliases))
+    .withColumn("country",       best_value("country",       sat_aliases))
+    .withColumn("phone",         best_value("phone",         sat_aliases))
+    .withColumn("website_url",   best_value("website_url",   sat_aliases))
+    .withColumn("latitude",      best_value("latitude",      sat_aliases))
+    .withColumn("longitude",     best_value("longitude",     sat_aliases))
+    .withColumn("timezone",      best_value("timezone",      sat_aliases))
+    .withColumn("currency_code", best_value("currency_code", sat_aliases))
+    .withColumn("avg_rating",    F.col("ys_rating"))
+    .withColumn("review_count",  F.col("ys_reviews"))
+    .withColumn("cost_center",   best_value("cost_center",   sat_aliases))
+    .withColumn("region",        best_value("region",        sat_aliases))
+    # Lineage: skąd pochodzi pole (config-driven)
+    .withColumn("name_source",    best_source("name",    sat_aliases))
+    .withColumn("country_source", best_source("country", sat_aliases))
+    .withColumn("city_source",    best_source("city",    sat_aliases))
     # Source crosswalk IDs — extracted from hub.business_key (format: "source|id")
     .withColumn("lightspeed_bl_id",
         F.when(F.col("record_source") == "lightspeed",
@@ -236,9 +255,14 @@ golden_final = (
 # CELL 6: SCD2 MERGE do gold.dim_location
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# CELL 6: SCD2 MERGE do gold.dim_location — atomowy (jeden MERGE zamiast dwóch)
+# Zamknięcie starych + wstawienie nowych w jednej operacji Delta MERGE,
+# co eliminuje ryzyko duplikatów przy double-run w tym samym batchu.
+# ---------------------------------------------------------------------------
+
 gold_delta = DeltaTable.forName(spark, "gold.dim_location")
 
-# Zamknij stare aktualne rekordy gdzie coś się zmieniło
 gold_delta.alias("gold").merge(
     golden_final.alias("new"),
     "gold.location_hk = new.location_hk AND gold.is_current = true"
@@ -252,9 +276,11 @@ gold_delta.alias("gold").merge(
         "is_current": "false",
         "updated_at": "new.updated_at"
     }
+).whenNotMatchedInsertAll(
 ).execute()
 
-# Wstaw nowe (lub całkowicie nowe) golden records
+# Wstaw nowe wersje dla rekordów, których stara wersja właśnie została zamknięta
+# (po MERGE powyżej ich is_current = false, więc left_anti je znajdzie)
 new_inserts = (
     golden_final.alias("new")
     .join(

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { usePairReview } from '../../hooks/useMdm';
-import { getMatchCandidates } from '../../api/mdmApi';
+import { getPairById } from '../../api/mdmApi';
 import type { MatchCandidate, SatelliteLocation } from '../../types/mdm.types';
 import { CheckCircle, XCircle, ArrowLeft, Star, Phone, Globe, MapPin } from 'lucide-react';
 import { cn } from '../../lib/utils';
@@ -115,13 +115,12 @@ export function PairDetail() {
   const { mutate: reviewPair, isPending } = usePairReview();
   const [reviewNote, setReviewNote] = useState('');
 
-  // Pobierz parę (w produkcji: endpoint per pairId; tu filtrujemy z listy)
-  const { data: queueData, isLoading } = useQuery({
+  // Pobierz pojedynczą parę przez dedykowany endpoint
+  const { data: candidate, isLoading } = useQuery({
     queryKey: ['pair-detail', pairId],
-    queryFn: () => getMatchCandidates(1, 1000, 'all'),
+    queryFn: () => getPairById(pairId!),
+    enabled: !!pairId,
   });
-
-  const candidate = queueData?.items.find(c => c.pairId === pairId);
 
   function handleAction(action: 'accept' | 'reject') {
     if (!candidate) return;
