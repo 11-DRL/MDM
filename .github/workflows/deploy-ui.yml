@@ -33,7 +33,6 @@ jobs:
         working-directory: stewardship-ui
         env:
           # Zmienne wstrzykiwane przez GitHub Secrets (Settings → Secrets)
-          VITE_FABRIC_SQL_ENDPOINT: ${{ secrets.VITE_FABRIC_SQL_ENDPOINT }}
           VITE_WRITE_API_URL:       ${{ secrets.VITE_WRITE_API_URL }}
           VITE_TENANT_ID:           ${{ secrets.VITE_TENANT_ID }}
           VITE_CLIENT_ID:           ${{ secrets.VITE_CLIENT_ID }}

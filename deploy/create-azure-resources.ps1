@@ -254,7 +254,7 @@ FABRIC_WORKSPACE_ID=<workspace-id>
 #    GitHub repo → Settings → Secrets → AZURE_STATIC_WEB_APPS_API_TOKEN
 #
 # 2. Uzupełnij stewardship-ui/.env:
-#    VITE_TENANT_ID, VITE_CLIENT_ID, VITE_API_BASE_URL (= FUNC_APP_URL)
+#    VITE_TENANT_ID, VITE_CLIENT_ID, VITE_WRITE_API_URL (= FUNC_APP_URL)
 #
 # 3. Zaktualizuj WorkloadManifest.xml:
 #    Zamień __VITE_CLIENT_ID__ → CLIENT_ID

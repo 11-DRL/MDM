@@ -291,23 +291,20 @@ Error Handler → execution_log (status=Failed)
 - Audit log (append-only, od najnowszego)
 - Crosswalk IDs (lightspeed_bl_id, yext_id, mcwin_restaurant_id, gopos_location_id)
 
-### Wzorzec zapisu
+### Wzorzec komunikacji UI
 
 ```
-UI → POST /api/mdm/location/review → Azure Function
-                                          ↓
-                              UPDATE bv_location_match_candidates
-                              INSERT bv_location_key_resolution  (jeśli accept)
-                              INSERT stewardship_log
+UI → GET/POST /api/mdm/* → Azure Function
+                             ↓
+                    SELECT/UPDATE/INSERT przez MSI do Fabric SQL Endpoint
 ```
 
-UI **nigdy** nie zapisuje bezpośrednio do Delta tables — wymaga Spark/SQL endpoint.
+UI **nie łączy się bezpośrednio** z SQL Analytics Endpoint. Odczyt i zapis idą przez Azure Function.
 
 ### Zmienne środowiskowe
 
 ```env
 VITE_MOCK_MODE=true                   # local dev bez konfiguracji
-VITE_FABRIC_SQL_ENDPOINT=https://...  # {workspace}.{region}.pbidedicated.windows.net
 VITE_WRITE_API_URL=https://...        # Azure Function App URL
 VITE_TENANT_ID=<guid>                 # Azure AD tenant
 VITE_CLIENT_ID=<guid>                 # App Registration client ID
@@ -315,7 +312,7 @@ VITE_CLIENT_ID=<guid>                 # App Registration client ID
 
 ---
 
-## 7. Azure Function — Write Proxy
+## 7. Azure Function — Read/Write Proxy
 
 **`azure-function/src/functions/mdmWrite.ts`** — TypeScript Azure Function v4
 
@@ -335,6 +332,15 @@ Body: { locationHk, fieldName, newValue, reason }
   Whitelist pól: name, city, zip_code, country, phone, website_url,
                  timezone, currency_code, cost_center, region
   INSERT stewardship_log (gold re-derivowany przez kolejny pipeline run)
+
+GET /api/mdm/queue/stats
+GET /api/mdm/location/candidates?page=1&pageSize=25&status=pending
+GET /api/mdm/location/pair/{pairId}
+GET /api/mdm/location/golden
+GET /api/mdm/location/golden/{locationHk}
+GET /api/mdm/location/log/{locationHk}
+GET /api/mdm/config/field-config?entityId=business_location
+GET /api/mdm/config/source-priority?entityId=business_location
 
 GET /api/health → { status: "ok" }
 ```
@@ -460,7 +466,6 @@ npm run dev
 #    - skopiuj API token do GitHub Secrets: AZURE_STATIC_WEB_APPS_API_TOKEN
 
 # 2. GitHub Secrets (Settings → Secrets):
-VITE_FABRIC_SQL_ENDPOINT=https://...
 VITE_WRITE_API_URL=https://...
 VITE_TENANT_ID=<guid>
 VITE_CLIENT_ID=<guid>
@@ -549,9 +554,9 @@ Istniejący ADF używa Self-Hosted Integration Runtime. Fabric wymaga jednego z:
 - Umożliwia MERGE bez sekwencji (Fabric Delta nie ma auto-increment)
 - Pozwala na `bv_location_key_resolution` bez FK — hash jest samowystarczalnym ID
 
-### Dlaczego Azure Function jako write proxy?
+### Dlaczego Azure Function jako read/write proxy?
 
-Fabric SQL Endpoint obsługuje **tylko odczyt** przez REST. Zapis do Delta wymaga Spark lub SQL przez JDBC (Managed Identity). Azure Function z MSI = zapis bez haseł.
+Jedno API upraszcza auth i CORS (Fabric iFrame + standalone), a MSI daje bezhasłowy dostęp do SQL Endpoint dla odczytu i zapisu.
 
 ### Wzorce z losadf/ zachowane w MDM
 
