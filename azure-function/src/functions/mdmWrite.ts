@@ -137,6 +137,30 @@ async function execSql(query: string, params: Record<string, unknown> = {}): Pro
   }));
 }
 
+async function execSqlWithRowCount(query: string, params: Record<string, unknown> = {}): Promise<number> {
+  return withRetry(() => new Promise<number>(async (resolve, reject) => {
+    let conn: sql.Connection;
+    try {
+      conn = await getConnection();
+    } catch (err) {
+      return reject(err);
+    }
+    conn.on('connect', (err) => {
+      if (err) return reject(err);
+
+      const request = new sql.Request(query, (requestErr, rowCount) => {
+        conn.close();
+        if (requestErr) reject(requestErr);
+        else resolve(rowCount ?? 0);
+      });
+
+      addSqlParameters(request, params);
+      conn.execSql(request);
+    });
+    conn.connect();
+  }));
+}
+
 async function querySql<T = Record<string, unknown>>(query: string, params: Record<string, unknown> = {}): Promise<T[]> {
   return withRetry(() => new Promise(async (resolve, reject) => {
     let conn: sql.Connection;
@@ -906,12 +930,29 @@ async function reviewPair(req: HttpRequest, ctx: InvocationContext): Promise<Htt
     const pairRows = await querySql<Record<string, unknown>>(`
       SELECT
         CONVERT(VARCHAR(64), hk_left, 2) AS hkLeft,
-        CONVERT(VARCHAR(64), hk_right, 2) AS hkRight
+        CONVERT(VARCHAR(64), hk_right, 2) AS hkRight,
+        status,
+        reviewed_by  AS reviewedBy,
+        reviewed_at  AS reviewedAt
       FROM silver_dv.bv_location_match_candidates
       WHERE pair_id = @pairId
     `, { pairId: body.pairId });
 
     if (pairRows.length === 0) return { status: 404, jsonBody: { error: 'Pair not found' } };
+
+    const currentStatus = asString(pairRows[0].status);
+    if (currentStatus !== 'pending') {
+      // Optimistic concurrency: ktoś inny zdążył zrecenzować tę parę.
+      return {
+        status: 409,
+        jsonBody: {
+          error: 'Pair already reviewed',
+          currentStatus,
+          reviewedBy: asString(pairRows[0].reviewedBy),
+          reviewedAt: asIso(pairRows[0].reviewedAt),
+        },
+      };
+    }
 
     const hkLeft = asString(pairRows[0].hkLeft)?.toLowerCase();
     const hkRight = asString(pairRows[0].hkRight)?.toLowerCase();
@@ -921,51 +962,94 @@ async function reviewPair(req: HttpRequest, ctx: InvocationContext): Promise<Htt
     const canonicalHk = requestedCanonical ?? hkLeft;
     const sourceHk = canonicalHk === hkLeft ? hkRight : hkLeft;
     const status = body.action === 'accept' ? 'accepted' : 'rejected';
+    const logId = crypto.randomUUID();
+    const logAction = body.action === 'accept' ? 'accept_match' : 'reject_match';
+    const isAccept = body.action === 'accept' ? 1 : 0;
 
-    await execSql(`
-      UPDATE silver_dv.bv_location_match_candidates
-      SET status = @status, reviewed_by = @caller, reviewed_at = GETUTCDATE(), review_note = @reason
-      WHERE pair_id = @pairId
-    `, { status, caller, reason: body.reason ?? '', pairId: body.pairId });
+    // Atomowy batch: UPDATE (guarded) + warunkowy INSERT resolution + INSERT log.
+    // XACT_ABORT ON gwarantuje rollback przy dowolnym błędzie (np. constraint violation).
+    // Własny RAISERROR 50409 sygnalizuje wyścig (rowCount=0 po UPDATE).
+    try {
+      const affected = await execSqlWithRowCount(`
+        SET XACT_ABORT ON;
+        BEGIN TRANSACTION;
 
-    if (body.action === 'accept') {
-      await execSql(`
-        INSERT INTO silver_dv.bv_location_key_resolution
-          (source_hk, canonical_hk, resolved_by, resolved_at, pair_id, resolution_type)
-        SELECT
-          CONVERT(VARBINARY(32), @sourceHk, 2),
+        UPDATE silver_dv.bv_location_match_candidates
+        SET status = @status, reviewed_by = @caller, reviewed_at = GETUTCDATE(), review_note = @reason
+        WHERE pair_id = @pairId AND status = 'pending';
+
+        IF @@ROWCOUNT = 0
+        BEGIN
+          ROLLBACK TRANSACTION;
+          RAISERROR('CONCURRENCY_CONFLICT', 16, 1);
+          RETURN;
+        END
+
+        IF @isAccept = 1
+        BEGIN
+          INSERT INTO silver_dv.bv_location_key_resolution
+            (source_hk, canonical_hk, resolved_by, resolved_at, pair_id, resolution_type)
+          SELECT
+            CONVERT(VARBINARY(32), @sourceHk, 2),
+            CONVERT(VARBINARY(32), @canonicalHk, 2),
+            @caller,
+            GETUTCDATE(),
+            @pairId,
+            'manual'
+          WHERE NOT EXISTS (
+            SELECT 1 FROM silver_dv.bv_location_key_resolution r
+            WHERE r.source_hk = CONVERT(VARBINARY(32), @sourceHk, 2)
+          );
+        END
+
+        INSERT INTO silver_dv.stewardship_log (log_id, canonical_hk, action, changed_by, changed_at, pair_id, reason)
+        VALUES (
+          @logId,
           CONVERT(VARBINARY(32), @canonicalHk, 2),
+          @logAction,
           @caller,
           GETUTCDATE(),
           @pairId,
-          'manual'
-        WHERE NOT EXISTS (
-          SELECT 1
-          FROM silver_dv.bv_location_key_resolution r
-          WHERE r.source_hk = CONVERT(VARBINARY(32), @sourceHk, 2)
-        )
-      `, { sourceHk, canonicalHk, caller, pairId: body.pairId });
-    }
+          @reason
+        );
 
-    await execSql(`
-      INSERT INTO silver_dv.stewardship_log (log_id, canonical_hk, action, changed_by, changed_at, pair_id, reason)
-      VALUES (
-        @logId,
-        CONVERT(VARBINARY(32), @canonicalHk, 2),
-        @action,
-        @caller,
-        GETUTCDATE(),
-        @pairId,
-        @reason
-      )
-    `, {
-      logId: crypto.randomUUID(),
-      canonicalHk,
-      action: body.action === 'accept' ? 'accept_match' : 'reject_match',
-      caller,
-      pairId: body.pairId,
-      reason: body.reason ?? '',
-    });
+        COMMIT TRANSACTION;
+      `, {
+        status,
+        caller,
+        reason: body.reason ?? '',
+        pairId: body.pairId,
+        isAccept,
+        sourceHk,
+        canonicalHk,
+        logId,
+        logAction,
+      });
+
+      // Guard: upewnij się że transakcja faktycznie coś zmieniła (ochrona przed zwróceniem 200 gdyby batch nic nie wykonał)
+      if (affected === 0) {
+        ctx.warn(`reviewPair: batch reported rowCount=0 for pair ${body.pairId}`);
+      }
+    } catch (err) {
+      const msg = String((err as Error)?.message ?? err);
+      if (msg.includes('CONCURRENCY_CONFLICT')) {
+        const latest = await querySql<Record<string, unknown>>(`
+          SELECT status, reviewed_by AS reviewedBy, reviewed_at AS reviewedAt
+          FROM silver_dv.bv_location_match_candidates
+          WHERE pair_id = @pairId
+        `, { pairId: body.pairId });
+        return {
+          status: 409,
+          jsonBody: {
+            error: 'Pair already reviewed',
+            currentStatus: asString(latest[0]?.status),
+            reviewedBy: asString(latest[0]?.reviewedBy),
+            reviewedAt: asIso(latest[0]?.reviewedAt),
+          },
+        };
+      }
+      throw err;
+    }
 
     ctx.log(`Pair ${body.pairId} ${status} by ${caller}`);
     return { status: 200, jsonBody: { ok: true, pairId: body.pairId, status } };
@@ -987,6 +1071,7 @@ async function overrideField(req: HttpRequest, ctx: InvocationContext): Promise<
     fieldName: string;
     newValue: string;
     reason: string;
+    expectedOldValue?: string | null;
   };
 
   const locationHk = sanitizeHex32(body.locationHk);
@@ -1019,6 +1104,22 @@ async function overrideField(req: HttpRequest, ctx: InvocationContext): Promise<
     `, { locationHk });
 
     const oldValue = asString(rows[0]?.fieldValue) ?? '';
+
+    // Optimistic concurrency: jeśli UI dostarczył expectedOldValue, sprawdź czy nic się nie zmieniło.
+    // Null/undefined w expectedOldValue = klient rezygnuje ze sprawdzenia (backward-compatible).
+    if (body.expectedOldValue !== undefined && body.expectedOldValue !== null) {
+      const expected = String(body.expectedOldValue);
+      if (oldValue !== expected) {
+        return {
+          status: 412,
+          jsonBody: {
+            error: 'Field value changed since last read',
+            currentValue: oldValue,
+            expectedValue: expected,
+          },
+        };
+      }
+    }
     await execSql(`
       INSERT INTO silver_dv.stewardship_log
         (log_id, canonical_hk, action, field_name, old_value, new_value, changed_by, changed_at, reason)

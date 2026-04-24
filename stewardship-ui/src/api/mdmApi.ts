@@ -2,7 +2,7 @@
 // API client - all live read/write goes through Azure Function proxy.
 // In mock mode data comes from local fixtures.
 
-import axios, { AxiosInstance } from 'axios';
+import axios, { AxiosInstance, AxiosError } from 'axios';
 import { PublicClientApplication } from '@azure/msal-browser';
 import type {
   MatchCandidatePage,
@@ -55,6 +55,46 @@ async function createApiClient(): Promise<AxiosInstance> {
       'Content-Type': 'application/json',
     },
   });
+}
+
+// ---------- Typed errors ----------
+
+export class ApiConflictError extends Error {
+  readonly status = 409;
+  constructor(
+    public readonly currentStatus?: string,
+    public readonly reviewedBy?: string,
+    public readonly reviewedAt?: string,
+    message = 'Rekord został już zmieniony przez innego użytkownika',
+  ) {
+    super(message);
+    this.name = 'ApiConflictError';
+  }
+}
+
+export class ApiPreconditionError extends Error {
+  readonly status = 412;
+  constructor(
+    public readonly currentValue?: unknown,
+    message = 'Rekord zmieniony od ostatniego odczytu — odśwież widok',
+  ) {
+    super(message);
+    this.name = 'ApiPreconditionError';
+  }
+}
+
+function mapAxiosError(err: unknown): never {
+  if (axios.isAxiosError(err)) {
+    const ax = err as AxiosError<{ error?: string; currentStatus?: string; reviewedBy?: string; reviewedAt?: string; currentValue?: unknown }>;
+    const body = ax.response?.data;
+    if (ax.response?.status === 409) {
+      throw new ApiConflictError(body?.currentStatus, body?.reviewedBy, body?.reviewedAt, body?.error);
+    }
+    if (ax.response?.status === 412) {
+      throw new ApiPreconditionError(body?.currentValue, body?.error);
+    }
+  }
+  throw err;
 }
 
 // ---------- Queue ----------
@@ -123,21 +163,36 @@ export async function submitPairReview(action: PairReviewAction): Promise<void> 
     return;
   }
   const client = await createApiClient();
-  await client.post('/api/mdm/location/review', action);
+  try {
+    await client.post('/api/mdm/location/review', action);
+  } catch (err) {
+    mapAxiosError(err);
+  }
 }
 
 export async function overrideField(
   locationHk: string,
   fieldName: string,
   newValue: string,
-  reason: string
+  reason: string,
+  expectedOldValue?: string | null,
 ): Promise<void> {
   if (MOCK_MODE) {
     await mockApi.overrideField(locationHk, fieldName, newValue, reason);
     return;
   }
   const client = await createApiClient();
-  await client.post('/api/mdm/location/override', { locationHk, fieldName, newValue, reason });
+  try {
+    await client.post('/api/mdm/location/override', {
+      locationHk,
+      fieldName,
+      newValue,
+      reason,
+      expectedOldValue: expectedOldValue ?? null,
+    });
+  } catch (err) {
+    mapAxiosError(err);
+  }
 }
 
 export type { CreateLocationInput };
@@ -145,8 +200,12 @@ export type { CreateLocationInput };
 export async function createLocation(data: CreateLocationInput): Promise<{ locationHk: string }> {
   if (MOCK_MODE) return mockApi.createLocation(data);
   const client = await createApiClient();
-  const { data: result } = await client.post('/api/mdm/location/create', data);
-  return result;
+  try {
+    const { data: result } = await client.post('/api/mdm/location/create', data);
+    return result;
+  } catch (err) {
+    mapAxiosError(err);
+  }
 }
 
 // ---------- Config ----------

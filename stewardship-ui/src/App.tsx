@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MsalProvider, AuthenticatedTemplate, UnauthenticatedTemplate } from '@azure/msal-react';
+import { Toaster } from 'sonner';
 import { msalInstance, MOCK_MODE } from './api/mdmApi';
 import { fabricHost } from './lib/fabricHost';
 import { ReviewQueue } from './components/ReviewQueue/ReviewQueue';
@@ -94,6 +95,7 @@ export default function App() {
   if (MOCK_MODE) {
     return (
       <QueryClientProvider client={queryClient}>
+        <Toaster position="top-right" richColors closeButton />
         <BrowserRouter>
           <Layout>
             <Routes>
@@ -116,6 +118,7 @@ export default function App() {
   if (fabricHost.isInsideFabric) {
     return (
       <QueryClientProvider client={queryClient}>
+        <Toaster position="top-right" richColors closeButton />
         <BrowserRouter>
           <Layout>
             <Routes>
@@ -138,6 +141,7 @@ export default function App() {
   return (
     <MsalProvider instance={msalInstance}>
       <QueryClientProvider client={queryClient}>
+        <Toaster position="top-right" richColors closeButton />
         <UnauthenticatedTemplate>
           <LoginPage />
         </UnauthenticatedTemplate>

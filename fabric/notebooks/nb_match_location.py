@@ -21,13 +21,16 @@ from pyspark.sql import functions as F
 from pyspark.sql.types import DoubleType, StringType, BooleanType
 import uuid
 
-# Jaro-Winkler przez jellyfish (pip install jellyfish w Fabric)
+# Jaro-Winkler przez jellyfish — wymagane, brak cichych fallbacków.
+# Instalacja: %pip install -r requirements.txt w Fabric Environment (lub attach env).
 try:
     import jellyfish
-    HAS_JELLYFISH = True
-except ImportError:
-    HAS_JELLYFISH = False
-    print("WARNING: jellyfish not available, falling back to Levenshtein ratio")
+except ImportError as exc:
+    raise ImportError(
+        "Pakiet 'jellyfish' nie jest zainstalowany w Fabric environment. "
+        "Uruchom w komórce: %pip install jellyfish==1.0.3 "
+        "lub podłącz environment zbudowany z fabric/notebooks/requirements.txt"
+    ) from exc
 
 @F.udf(DoubleType())
 def jaro_winkler_udf(s1, s2):
@@ -36,12 +39,7 @@ def jaro_winkler_udf(s1, s2):
         return 0.0
     if s1 == s2:
         return 1.0
-    if HAS_JELLYFISH:
-        return float(jellyfish.jaro_winkler_similarity(s1, s2))
-    # Fallback: simple ratio
-    shorter = min(len(s1), len(s2))
-    longer  = max(len(s1), len(s2))
-    return shorter / longer if longer > 0 else 0.0
+    return float(jellyfish.jaro_winkler_similarity(s1, s2))
 
 @F.udf(DoubleType())
 def geo_score_udf(lat1, lon1, lat2, lon2):

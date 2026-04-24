@@ -31,9 +31,13 @@ function EditableField({ fieldName, label, value, source, locationHk }: {
   const { mutate: overrideField, isPending } = useFieldOverride();
 
   function handleSave() {
-    overrideField({ locationHk, fieldName, newValue: draft, reason }, {
-      onSuccess: () => setEditing(false),
-    });
+    // expectedOldValue = wartość którą user widział przed edycją.
+    // Backend porówna z aktualnym stanem w DB → 412 jeśli ktoś inny zmienił.
+    const expectedOldValue = value === null || value === undefined ? '' : String(value);
+    overrideField(
+      { locationHk, fieldName, newValue: draft, reason, expectedOldValue },
+      { onSuccess: () => setEditing(false) },
+    );
   }
 
   return (

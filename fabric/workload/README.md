@@ -11,15 +11,15 @@ fabric/workload/
     ├── Product.json           ← metadane w Fabric portal (nazwa, opis, ikony)
     ├── MDMStewardship.json    ← front-end config dla Item Type
     └── assets/
-        ├── mdm-icon-32.png    ← ikona 32×32 px (DODAJ!)
-        └── mdm-icon-44.png    ← ikona 44×44 px (DODAJ!)
+        ├── mdm-icon-32.png    ← ikona 32×32 px
+        └── mdm-icon-44.png    ← ikona 44×44 px
 ```
 
 ## Ikony
 
-Wygeneruj dwa pliki PNG (np. logo L'Osteria lub pin MDM):
-- `assets/mdm-icon-32.png` — 32×32 px
-- `assets/mdm-icon-44.png` — 44×44 px
+Repo zawiera placeholder (pin MDM). Aby podmienić na docelowe logo L'Osteria:
+- `assets/mdm-icon-32.png` — 32×32 px PNG (RGBA, transparent background)
+- `assets/mdm-icon-44.png` — 44×44 px PNG (RGBA, transparent background)
 
 ## Konfiguracja
 
