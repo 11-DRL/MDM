@@ -113,7 +113,9 @@ function ConvertTo-FabricNotebookB64 {
         [string]$PythonFile,
         [string]$LakehouseName = "lh_mdm",
         [Parameter(Mandatory = $true)][string]$LakehouseId,
-        [Parameter(Mandatory = $true)][string]$LakehouseWorkspaceId
+        [Parameter(Mandatory = $true)][string]$LakehouseWorkspaceId,
+        [string]$WarehouseId,
+        [string]$WarehouseName = "wh_mdm"
     )
 
     $raw   = Get-Content $PythonFile -Raw -Encoding UTF8
@@ -138,7 +140,8 @@ function ConvertTo-FabricNotebookB64 {
         $cellBodies.Add((($buf -join "`n").TrimEnd()))
     }
 
-    # Top-level metadata block (kernel + lakehouse dependencies)
+    # Top-level metadata block (kernel + lakehouse dependencies).
+    # Note: Warehouse cross-DB writes handled via T-SQL COPY from Lakehouse, not via notebook synapsesql.
     $topMeta = [ordered]@{
         kernel_info  = @{ name = "synapse_pyspark" }
         dependencies = @{
@@ -195,13 +198,15 @@ function Deploy-Notebook {
         [string]$Name,
         [string]$PythonFile,
         [Parameter(Mandatory = $true)][string]$LakehouseId,
-        [Parameter(Mandatory = $true)][string]$LakehouseWorkspaceId
+        [Parameter(Mandatory = $true)][string]$LakehouseWorkspaceId,
+        [string]$WarehouseId
     )
 
     $b64 = ConvertTo-FabricNotebookB64 `
         -PythonFile $PythonFile `
         -LakehouseId $LakehouseId `
-        -LakehouseWorkspaceId $LakehouseWorkspaceId
+        -LakehouseWorkspaceId $LakehouseWorkspaceId `
+        -WarehouseId $WarehouseId
 
     $definition = @{
         format = "fabricGitSource"
@@ -320,6 +325,68 @@ if ($existingLh) {
     }
 }
 
+# ─── 1b. WAREHOUSE ────────────────────────────────────────────────────────────
+Step "Tworzenie Warehouse 'wh_mdm'..."
+$existingWh = (Invoke-Fabric GET "/workspaces/$WorkspaceId/warehouses").value `
+    | Where-Object { $_.displayName -eq "wh_mdm" } | Select-Object -First 1
+if ($existingWh) {
+    $WAREHOUSE_ID = $existingWh.id
+    OK "Warehouse 'wh_mdm' juz istnieje (id=$WAREHOUSE_ID)"
+} else {
+    $whBody = @{
+        displayName = "wh_mdm"
+        description = "MDM Stewardship - operational writes (mdm_config, silver_dv, gold)"
+    } | ConvertTo-Json -Compress
+    $whResp = Invoke-WebRequest -Method POST `
+        -Uri "$FABRIC_API/workspaces/$WorkspaceId/warehouses" `
+        -Headers $HEADERS -Body $whBody -UseBasicParsing
+    if ($whResp.StatusCode -eq 201) {
+        $WAREHOUSE_ID = ($whResp.Content | ConvertFrom-Json).id
+        OK "Warehouse utworzony (sync, id=$WAREHOUSE_ID)"
+    } elseif ($whResp.StatusCode -eq 202) {
+        $opId = $whResp.Headers.'x-ms-operation-id' | Select-Object -First 1
+        if (-not $opId) { $opId = $whResp.Headers.'X-Ms-Operation-Id' | Select-Object -First 1 }
+        OK "Warehouse creation submitted (opId=$opId) — czekam..."
+        do {
+            Start-Sleep 5
+            $op = Invoke-RestMethod -Uri "$FABRIC_API/operations/$opId" -Headers $HEADERS
+            Write-Host "  ... $($op.status)"
+        } while ($op.status -notin @("Succeeded","Failed"))
+        if ($op.status -ne "Succeeded") { Fail "Warehouse creation failed: $($op | ConvertTo-Json -Depth 10)" }
+        $existingWh = (Invoke-Fabric GET "/workspaces/$WorkspaceId/warehouses").value `
+            | Where-Object { $_.displayName -eq "wh_mdm" } | Select-Object -First 1
+        if (-not $existingWh) { Fail "Warehouse 'wh_mdm' not found after async create" }
+        $WAREHOUSE_ID = $existingWh.id
+        OK "Warehouse 'wh_mdm' utworzony (id=$WAREHOUSE_ID)"
+    } else {
+        Fail "Unexpected status code: $($whResp.StatusCode)"
+    }
+}
+
+# Pobranie SQL endpointu Warehouse (connectionString w properties)
+$whDetail = Invoke-Fabric GET "/workspaces/$WorkspaceId/warehouses/$WAREHOUSE_ID"
+$WAREHOUSE_ENDPOINT = $whDetail.properties.connectionString
+if (-not $WAREHOUSE_ENDPOINT) { Fail "Nie udalo sie pobrac SQL endpointu Warehouse" }
+OK "Warehouse endpoint: $WAREHOUSE_ENDPOINT"
+
+# ─── 1c. WAREHOUSE DDL + CONFIG SEED ──────────────────────────────────────────
+Step "Aplikowanie T-SQL DDL do Warehouse..."
+$ddlFile    = Join-Path $REPO_ROOT "fabric\warehouse\ddl\create_warehouse_tables.sql"
+$configFile = Join-Path $REPO_ROOT "fabric\warehouse\seed\seed_mdm_config.sql"
+$ddlRunner  = Join-Path $REPO_ROOT "deploy\apply-warehouse-ddl.js"
+if (-not (Test-Path $ddlFile))    { Fail "Missing $ddlFile" }
+if (-not (Test-Path $configFile)) { Fail "Missing $configFile" }
+if (-not (Test-Path $ddlRunner))  { Fail "Missing $ddlRunner" }
+
+& node $ddlRunner $WAREHOUSE_ENDPOINT "wh_mdm" $ddlFile
+if ($LASTEXITCODE -ne 0) { Fail "Warehouse DDL apply failed" }
+OK "Warehouse DDL zaaplikowany"
+
+Step "Seeding mdm_config (T-SQL)..."
+& node $ddlRunner $WAREHOUSE_ENDPOINT "wh_mdm" $configFile
+if ($LASTEXITCODE -ne 0) { Fail "mdm_config seed failed" }
+OK "mdm_config seed OK"
+
 # ─── 2. UPLOAD NOTEBOOKÓW ─────────────────────────────────────────────────────
 Step "Upload notebooków do Fabric workspace..."
 $nbDir = Join-Path $REPO_ROOT "fabric\notebooks"
@@ -331,7 +398,8 @@ foreach ($file in Get-ChildItem $nbDir -Filter "*.py" | Where-Object { $_.Name -
         -Name $name `
         -PythonFile $file.FullName `
         -LakehouseId $LAKEHOUSE_ID `
-        -LakehouseWorkspaceId $WorkspaceId
+        -LakehouseWorkspaceId $WorkspaceId `
+        -WarehouseId $WAREHOUSE_ID
 }
 
 # Upload seed notebook (jest w innym katalogu)
@@ -340,18 +408,13 @@ $NB_IDS["nb_seed_demo_data"] = Deploy-Notebook `
     -Name "nb_seed_demo_data" `
     -PythonFile $seedFile `
     -LakehouseId $LAKEHOUSE_ID `
-    -LakehouseWorkspaceId $WorkspaceId
+    -LakehouseWorkspaceId $WorkspaceId `
+    -WarehouseId $WAREHOUSE_ID
 OK "Wszystkie notebooki gotowe"
 
-# ─── 3. DDL — BOOTSTRAP ───────────────────────────────────────────────────────
-Step "Tworzenie tabel Delta (DDL bootstrap)..."
-$ddlNbId = $NB_IDS["nb_bootstrap_ddl"]
-Run-Notebook -NotebookId $ddlNbId -Name "nb_bootstrap_ddl"
-
-# Seed MDM config
-Step "Seeding MDM config tables..."
-$configNbId = $NB_IDS["nb_seed_mdm_config"]
-Run-Notebook -NotebookId $configNbId -Name "nb_seed_mdm_config"
+# ─── 3. DDL — BOOTSTRAP (bronze tylko; silver_dv/gold/mdm_config sa w Warehouse) ──
+# nb_bootstrap_ddl i nb_seed_mdm_config sa tworzone przez T-SQL w sekcji 1c.
+# Ten notebook nie jest juz wywolywany podczas deployu.
 
 # ─── 4. PIPELINES ─────────────────────────────────────────────────────────────
 Step "Upload Data Pipelines do Fabric workspace..."
@@ -405,11 +468,11 @@ Write-Host ("`n" + ("=" * 65)) -ForegroundColor Magenta
 Write-Host "  FABRIC DEPLOY - GOTOWE" -ForegroundColor Magenta
 Write-Host ("=" * 65) -ForegroundColor Magenta
 Write-Host "  Workspace ID:  $WorkspaceId" -ForegroundColor Yellow
-Write-Host "  Lakehouse:     lh_mdm" -ForegroundColor Yellow
+Write-Host "  Lakehouse:     lh_mdm (bronze)" -ForegroundColor Yellow
+Write-Host "  Warehouse:     wh_mdm (mdm_config, silver_dv, gold)" -ForegroundColor Yellow
+Write-Host "  WH endpoint:   $WAREHOUSE_ENDPOINT" -ForegroundColor Yellow
 Write-Host "  Notebooki:     $($NB_IDS.Count + 2) wgranych" -ForegroundColor Yellow
 Write-Host ""
-Write-Host "  Nastepny krok:" -ForegroundColor White
-Write-Host "  Fabric Portal -> lh_mdm -> SQL Analytics Endpoint" -ForegroundColor White
-Write-Host "  Skopiuj 'Server' i ustaw w Function App:" -ForegroundColor White
-Write-Host '  az functionapp config appsettings set --name func-mdm-stewardship --resource-group rg-fabric-poc-sdc --settings "FABRIC_SQL_SERVER=<endpoint>"' -ForegroundColor Gray
+Write-Host "  Ustaw Function App (Warehouse = write target):" -ForegroundColor White
+Write-Host "  az functionapp config appsettings set --name func-mdm-stewardship --resource-group rg-fabric-poc-sdc --settings FABRIC_SQL_SERVER=$WAREHOUSE_ENDPOINT FABRIC_DATABASE=wh_mdm" -ForegroundColor Gray
 Write-Host ("=" * 65) -ForegroundColor Magenta

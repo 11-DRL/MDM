@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 import hashlib, unicodedata
 
 LAKEHOUSE = "lh_mdm"
+WAREHOUSE = "wh_mdm"
 RUN_ID    = "seed-demo-001"
 TENANT    = "losteria"
 

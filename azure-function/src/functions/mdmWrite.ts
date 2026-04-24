@@ -81,7 +81,11 @@ async function getConnection(): Promise<sql.Connection> {
 }
 
 function sqlTypeForValue(value: unknown) {
-  if (typeof value === 'number') return Number.isInteger(value) ? sql.TYPES.Int : sql.TYPES.Float;
+  if (typeof value === 'bigint') return sql.TYPES.BigInt;
+  if (typeof value === 'number') {
+    if (!Number.isInteger(value)) return sql.TYPES.Float;
+    return (value > 2147483647 || value < -2147483648) ? sql.TYPES.BigInt : sql.TYPES.Int;
+  }
   if (typeof value === 'boolean') return sql.TYPES.Bit;
   if (value instanceof Date) return sql.TYPES.DateTime2;
   if (Buffer.isBuffer(value)) return sql.TYPES.VarBinary;
@@ -660,7 +664,7 @@ async function getGoldenLocation(req: HttpRequest, ctx: InvocationContext): Prom
       FROM gold.dim_location g
       LEFT JOIN quality_latest q
         ON g.location_hk = q.location_hk AND q.rn = 1
-      WHERE g.location_hk = CONVERT(BINARY(32), @locationHk, 2)
+      WHERE g.location_hk = CONVERT(VARBINARY(32), @locationHk, 2)
         AND g.is_current = 1
     `, { locationHk });
 
@@ -727,7 +731,7 @@ async function getStewardshipLog(req: HttpRequest, ctx: InvocationContext): Prom
         pair_id AS pairId,
         reason
       FROM silver_dv.stewardship_log
-      WHERE canonical_hk = CONVERT(BINARY(32), @locationHk, 2)
+      WHERE canonical_hk = CONVERT(VARBINARY(32), @locationHk, 2)
       ORDER BY changed_at DESC
       LIMIT 100
     `, { locationHk });
@@ -929,8 +933,8 @@ async function reviewPair(req: HttpRequest, ctx: InvocationContext): Promise<Htt
         INSERT INTO silver_dv.bv_location_key_resolution
           (source_hk, canonical_hk, resolved_by, resolved_at, pair_id, resolution_type)
         SELECT
-          CONVERT(BINARY(32), @sourceHk, 2),
-          CONVERT(BINARY(32), @canonicalHk, 2),
+          CONVERT(VARBINARY(32), @sourceHk, 2),
+          CONVERT(VARBINARY(32), @canonicalHk, 2),
           @caller,
           GETUTCDATE(),
           @pairId,
@@ -938,15 +942,16 @@ async function reviewPair(req: HttpRequest, ctx: InvocationContext): Promise<Htt
         WHERE NOT EXISTS (
           SELECT 1
           FROM silver_dv.bv_location_key_resolution r
-          WHERE r.source_hk = CONVERT(BINARY(32), @sourceHk, 2)
+          WHERE r.source_hk = CONVERT(VARBINARY(32), @sourceHk, 2)
         )
       `, { sourceHk, canonicalHk, caller, pairId: body.pairId });
     }
 
     await execSql(`
-      INSERT INTO silver_dv.stewardship_log (canonical_hk, action, changed_by, changed_at, pair_id, reason)
+      INSERT INTO silver_dv.stewardship_log (log_id, canonical_hk, action, changed_by, changed_at, pair_id, reason)
       VALUES (
-        CONVERT(BINARY(32), @canonicalHk, 2),
+        @logId,
+        CONVERT(VARBINARY(32), @canonicalHk, 2),
         @action,
         @caller,
         GETUTCDATE(),
@@ -954,6 +959,7 @@ async function reviewPair(req: HttpRequest, ctx: InvocationContext): Promise<Htt
         @reason
       )
     `, {
+      logId: crypto.randomUUID(),
       canonicalHk,
       action: body.action === 'accept' ? 'accept_match' : 'reject_match',
       caller,
@@ -1009,15 +1015,16 @@ async function overrideField(req: HttpRequest, ctx: InvocationContext): Promise<
     const rows = await querySql<Record<string, unknown>>(`
       SELECT ${body.fieldName} AS fieldValue
       FROM gold.dim_location
-      WHERE location_hk = CONVERT(BINARY(32), @locationHk, 2) AND is_current = 1
+      WHERE location_hk = CONVERT(VARBINARY(32), @locationHk, 2) AND is_current = 1
     `, { locationHk });
 
     const oldValue = asString(rows[0]?.fieldValue) ?? '';
     await execSql(`
       INSERT INTO silver_dv.stewardship_log
-        (canonical_hk, action, field_name, old_value, new_value, changed_by, changed_at, reason)
+        (log_id, canonical_hk, action, field_name, old_value, new_value, changed_by, changed_at, reason)
       VALUES (
-        CONVERT(BINARY(32), @locationHk, 2),
+        @logId,
+        CONVERT(VARBINARY(32), @locationHk, 2),
         'override_field',
         @fieldName,
         @oldValue,
@@ -1027,6 +1034,7 @@ async function overrideField(req: HttpRequest, ctx: InvocationContext): Promise<
         @reason
       )
     `, {
+      logId: crypto.randomUUID(),
       locationHk,
       fieldName: body.fieldName,
       oldValue,
@@ -1117,7 +1125,7 @@ async function createLocation(req: HttpRequest, ctx: InvocationContext): Promise
   try {
     await execSql(`
       INSERT INTO silver_dv.hub_location (location_hk, business_key, load_date, record_source)
-      VALUES (CONVERT(BINARY(32), @locationHk, 2), @businessKey, GETUTCDATE(), 'manual')
+      VALUES (CONVERT(VARBINARY(32), @locationHk, 2), @businessKey, GETUTCDATE(), 'manual')
     `, { locationHk, businessKey });
 
     await execSql(`
@@ -1127,7 +1135,7 @@ async function createLocation(req: HttpRequest, ctx: InvocationContext): Promise
         latitude, longitude, timezone, currency_code, cost_center, region, notes,
         name_std, country_std, city_std, created_by, created_at
       ) VALUES (
-        CONVERT(BINARY(32), @locationHk, 2), GETUTCDATE(), CONVERT(BINARY(32), @hashDiff, 2), 'manual',
+        CONVERT(VARBINARY(32), @locationHk, 2), GETUTCDATE(), CONVERT(VARBINARY(32), @hashDiff, 2), 'manual',
         @name, @country, @city, @zipCode, @address, @phone, @websiteUrl,
         @latitude, @longitude, @timezone, @currencyCode, @costCenter, @region, @notes,
         @nameStd, @countryStd, @cityStd, @caller, GETUTCDATE()
@@ -1157,19 +1165,20 @@ async function createLocation(req: HttpRequest, ctx: InvocationContext): Promise
 
     await execSql(`
       INSERT INTO gold.dim_location (
-        location_hk, valid_from, is_current,
+        location_sk, location_hk, valid_from, is_current,
         name, country, city, zip_code, address, phone,
         latitude, longitude, website_url, timezone, currency_code,
         cost_center, region, name_source, country_source, city_source,
         created_at, updated_at
       ) VALUES (
-        CONVERT(BINARY(32), @locationHk, 2), GETUTCDATE(), 1,
+        @locationSk, CONVERT(VARBINARY(32), @locationHk, 2), GETUTCDATE(), 1,
         @name, @country, @city, @zipCode, @address, @phone,
         @latitude, @longitude, @websiteUrl, @timezone, @currencyCode,
         @costCenter, @region, 'manual', 'manual', 'manual',
         GETUTCDATE(), GETUTCDATE()
       )
     `, {
+      locationSk: Date.now(),
       locationHk,
       name: body.name,
       country: body.country,
@@ -1190,7 +1199,7 @@ async function createLocation(req: HttpRequest, ctx: InvocationContext): Promise
       INSERT INTO gold.dim_location_quality
         (location_hk, snapshot_date, sources_count, completeness_score, has_lightspeed, has_yext, has_mcwin, has_gopos)
       VALUES (
-        CONVERT(BINARY(32), @locationHk, 2), GETUTCDATE(), 1,
+        CONVERT(VARBINARY(32), @locationHk, 2), GETUTCDATE(), 1,
         @completeness, 0, 0, 0, 0
       )
     `, {
@@ -1200,15 +1209,17 @@ async function createLocation(req: HttpRequest, ctx: InvocationContext): Promise
 
     await execSql(`
       INSERT INTO silver_dv.stewardship_log
-        (canonical_hk, action, changed_by, changed_at, reason)
+        (log_id, canonical_hk, action, changed_by, changed_at, reason)
       VALUES (
-        CONVERT(BINARY(32), @locationHk, 2),
+        @logId,
+        CONVERT(VARBINARY(32), @locationHk, 2),
         'manual_create',
         @caller,
         GETUTCDATE(),
         @reason
       )
     `, {
+      logId: crypto.randomUUID(),
       locationHk,
       caller,
       reason: `Manual create: ${body.name}`,

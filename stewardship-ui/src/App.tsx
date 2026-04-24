@@ -79,7 +79,7 @@ function LoginPage() {
         <h1 className="text-2xl font-bold text-gray-900 mb-1">MDM Stewardship</h1>
         <p className="text-gray-400 text-sm mb-6">L'Osteria Business Location</p>
         <button
-          onClick={() => msalInstance.loginPopup({ scopes: ['User.Read'] })}
+          onClick={() => msalInstance.loginRedirect({ scopes: ['User.Read'] })}
           className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2.5 px-4 rounded-xl transition-colors"
         >
           Zaloguj przez Azure AD
