@@ -3,6 +3,7 @@
 
 import { app, HttpRequest, HttpResponseInit, InvocationContext } from '@azure/functions';
 import { DefaultAzureCredential, type AccessToken } from '@azure/identity';
+import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
 import * as crypto from 'crypto';
 import * as sql from 'tedious';
 
@@ -15,32 +16,79 @@ const SAFE_ENTITY_ID_RE = /^[a-z0-9_]+$/i;
 
 // ---------- Auth ----------
 
-function validateBearerToken(req: HttpRequest): { ok: true; email: string } | { ok: false; status: 401 | 403; error: string } {
+type AuthResult = { ok: true; email: string } | { ok: false; status: 401 | 403 | 500; error: string };
+
+// JWKS cache — jeden obiekt per tenant, tworzony lazy i reużywany (biblioteka jose trzyma własny in-memory cache kluczy z TTL).
+let cachedJwks: ReturnType<typeof createRemoteJWKSet> | null = null;
+let cachedJwksTenant: string | null = null;
+
+function getJwks(tenantId: string) {
+  if (!cachedJwks || cachedJwksTenant !== tenantId) {
+    cachedJwks = createRemoteJWKSet(
+      new URL(`https://login.microsoftonline.com/${tenantId}/discovery/v2.0/keys`),
+    );
+    cachedJwksTenant = tenantId;
+  }
+  return cachedJwks;
+}
+
+function extractEmail(payload: JWTPayload): string {
+  const p = payload as Record<string, unknown>;
+  return (
+    (p.preferred_username as string | undefined) ??
+    (p.upn as string | undefined) ??
+    (p.email as string | undefined) ??
+    (p.unique_name as string | undefined) ??
+    'unknown'
+  );
+}
+
+export async function validateBearerToken(req: HttpRequest): Promise<AuthResult> {
   const authHeader = req.headers.get('authorization') ?? req.headers.get('Authorization');
   if (!authHeader?.startsWith('Bearer ')) {
     return { ok: false, status: 401, error: 'Missing or invalid Authorization header' };
   }
 
   const token = authHeader.slice(7);
-  try {
-    const parts = token.split('.');
-    if (parts.length !== 3) return { ok: false, status: 401, error: 'Malformed JWT' };
+  const tenantId = process.env.AZURE_TENANT_ID;
 
-    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf-8'));
-    const expectedTenant = process.env.AZURE_TENANT_ID;
-    if (expectedTenant && payload.tid && payload.tid !== expectedTenant) {
+  if (!tenantId) {
+    // Brak konfiguracji = fail-closed. Ops musi ustawić AZURE_TENANT_ID w Function App settings.
+    return { ok: false, status: 500, error: 'AZURE_TENANT_ID not configured on server' };
+  }
+
+  try {
+    // Akceptujemy zarówno wydawców v1 (sts.windows.net) jak i v2 (login.microsoftonline.com).
+    // Nie sprawdzamy audience — UI może przekazywać token Graph (User.Read) lub API.
+    // Bezpieczeństwo opiera się na: (1) poprawnym podpisie klucza Azure AD, (2) zgodności tenanta, (3) aktualności exp.
+    const v1Issuer = `https://sts.windows.net/${tenantId}/`;
+    const v2Issuer = `https://login.microsoftonline.com/${tenantId}/v2.0`;
+
+    const { payload } = await jwtVerify(token, getJwks(tenantId), {
+      issuer: [v1Issuer, v2Issuer],
+      clockTolerance: 5,
+    });
+
+    if (payload.tid && payload.tid !== tenantId) {
       return { ok: false, status: 403, error: 'Token tenant mismatch' };
     }
 
-    const email: string = payload.preferred_username ?? payload.upn ?? payload.email ?? payload.unique_name ?? 'unknown';
-    return { ok: true, email };
-  } catch {
-    return { ok: false, status: 401, error: 'Failed to decode JWT' };
+    return { ok: true, email: extractEmail(payload) };
+  } catch (err) {
+    const code = (err as { code?: string })?.code ?? '';
+    const message = (err as Error)?.message ?? 'unknown';
+
+    if (code === 'ERR_JWT_EXPIRED') return { ok: false, status: 401, error: 'Token expired' };
+    if (code === 'ERR_JWS_SIGNATURE_VERIFICATION_FAILED') return { ok: false, status: 401, error: 'Invalid token signature' };
+    if (code === 'ERR_JWT_CLAIM_VALIDATION_FAILED') return { ok: false, status: 401, error: `Invalid token claim: ${message}` };
+    if (code === 'ERR_JWS_INVALID' || code === 'ERR_JWT_INVALID') return { ok: false, status: 401, error: 'Malformed JWT' };
+
+    return { ok: false, status: 401, error: `Token validation failed: ${message}` };
   }
 }
 
-function requireAuth(req: HttpRequest): { ok: true; email: string } | HttpResponseInit {
-  const result = validateBearerToken(req);
+async function requireAuth(req: HttpRequest): Promise<{ ok: true; email: string } | HttpResponseInit> {
+  const result = await validateBearerToken(req);
   if (!result.ok) return { status: result.status, jsonBody: { error: result.error } };
   return result;
 }
@@ -227,24 +275,24 @@ function asIso(value: unknown): string | undefined {
   return undefined;
 }
 
-function sanitizeHex32(value: string | null | undefined): string | null {
+export function sanitizeHex32(value: string | null | undefined): string | null {
   if (!value) return null;
   const trimmed = value.trim();
   if (!HEX_32_RE.test(trimmed)) return null;
   return trimmed.toLowerCase();
 }
 
-function parsePositiveInt(rawValue: string | null, defaultValue: number, min: number, max: number): number {
+export function parsePositiveInt(rawValue: string | null, defaultValue: number, min: number, max: number): number {
   const parsed = Number(rawValue ?? defaultValue);
   if (!Number.isFinite(parsed)) return defaultValue;
   return Math.min(max, Math.max(min, Math.trunc(parsed)));
 }
 
-function parseStatus(raw: string | null): 'pending' | 'all' {
+export function parseStatus(raw: string | null): 'pending' | 'all' {
   return raw?.toLowerCase() === 'all' ? 'all' : 'pending';
 }
 
-function sanitizeEntityId(raw: string | null): string {
+export function sanitizeEntityId(raw: string | null): string {
   const value = raw?.trim() || 'business_location';
   if (!SAFE_ENTITY_ID_RE.test(value)) {
     throw new Error('Invalid entityId');
@@ -252,7 +300,7 @@ function sanitizeEntityId(raw: string | null): string {
   return value;
 }
 
-function toMatchSource(value: unknown): MatchSource {
+export function toMatchSource(value: unknown): MatchSource {
   const raw = String(value ?? '').toLowerCase();
   if (raw === 'lightspeed' || raw === 'yext' || raw === 'mcwin' || raw === 'gopos' || raw === 'manual') {
     return raw;
@@ -263,7 +311,7 @@ function toMatchSource(value: unknown): MatchSource {
 // ---------- Read: queue stats ----------
 
 async function getQueueStats(req: HttpRequest, ctx: InvocationContext): Promise<HttpResponseInit> {
-  const auth = requireAuth(req);
+  const auth = await requireAuth(req);
   if (!('email' in auth)) return auth;
 
   try {
@@ -299,7 +347,7 @@ async function getQueueStats(req: HttpRequest, ctx: InvocationContext): Promise<
 // ---------- Read: match candidates ----------
 
 async function getMatchCandidates(req: HttpRequest, ctx: InvocationContext): Promise<HttpResponseInit> {
-  const auth = requireAuth(req);
+  const auth = await requireAuth(req);
   if (!('email' in auth)) return auth;
 
   const page = parsePositiveInt(req.query.get('page'), 1, 1, 10_000);
@@ -394,7 +442,7 @@ async function getMatchCandidates(req: HttpRequest, ctx: InvocationContext): Pro
 // ---------- Read: pair detail ----------
 
 async function getPair(req: HttpRequest, ctx: InvocationContext): Promise<HttpResponseInit> {
-  const auth = requireAuth(req);
+  const auth = await requireAuth(req);
   if (!('email' in auth)) return auth;
 
   const pairId = req.params.pairId;
@@ -551,7 +599,7 @@ async function getPair(req: HttpRequest, ctx: InvocationContext): Promise<HttpRe
 // ---------- Read: golden locations ----------
 
 async function getGoldenLocations(req: HttpRequest, ctx: InvocationContext): Promise<HttpResponseInit> {
-  const auth = requireAuth(req);
+  const auth = await requireAuth(req);
   if (!('email' in auth)) return auth;
 
   const page = parsePositiveInt(req.query.get('page'), 1, 1, 10_000);
@@ -640,7 +688,7 @@ async function getGoldenLocations(req: HttpRequest, ctx: InvocationContext): Pro
 }
 
 async function getGoldenLocation(req: HttpRequest, ctx: InvocationContext): Promise<HttpResponseInit> {
-  const auth = requireAuth(req);
+  const auth = await requireAuth(req);
   if (!('email' in auth)) return auth;
 
   const locationHk = sanitizeHex32(req.params.locationHk);
@@ -735,7 +783,7 @@ async function getGoldenLocation(req: HttpRequest, ctx: InvocationContext): Prom
 }
 
 async function getStewardshipLog(req: HttpRequest, ctx: InvocationContext): Promise<HttpResponseInit> {
-  const auth = requireAuth(req);
+  const auth = await requireAuth(req);
   if (!('email' in auth)) return auth;
 
   const locationHk = sanitizeHex32(req.params.locationHk);
@@ -784,7 +832,7 @@ async function getStewardshipLog(req: HttpRequest, ctx: InvocationContext): Prom
 // ---------- Read: config ----------
 
 async function getEntityConfig(req: HttpRequest, ctx: InvocationContext): Promise<HttpResponseInit> {
-  const auth = requireAuth(req);
+  const auth = await requireAuth(req);
   if (!('email' in auth)) return auth;
 
   let entityId: string;
@@ -829,7 +877,7 @@ async function getEntityConfig(req: HttpRequest, ctx: InvocationContext): Promis
 }
 
 async function getFieldConfigs(req: HttpRequest, ctx: InvocationContext): Promise<HttpResponseInit> {
-  const auth = requireAuth(req);
+  const auth = await requireAuth(req);
   if (!('email' in auth)) return auth;
 
   let entityId: string;
@@ -871,7 +919,7 @@ async function getFieldConfigs(req: HttpRequest, ctx: InvocationContext): Promis
 }
 
 async function getSourcePriorities(req: HttpRequest, ctx: InvocationContext): Promise<HttpResponseInit> {
-  const auth = requireAuth(req);
+  const auth = await requireAuth(req);
   if (!('email' in auth)) return auth;
 
   let entityId: string;
@@ -911,7 +959,7 @@ async function getSourcePriorities(req: HttpRequest, ctx: InvocationContext): Pr
 // ---------- Write: review pair ----------
 
 async function reviewPair(req: HttpRequest, ctx: InvocationContext): Promise<HttpResponseInit> {
-  const auth = requireAuth(req);
+  const auth = await requireAuth(req);
   if (!('email' in auth)) return auth;
   const caller = auth.email;
 
@@ -1062,7 +1110,7 @@ async function reviewPair(req: HttpRequest, ctx: InvocationContext): Promise<Htt
 // ---------- Write: override field ----------
 
 async function overrideField(req: HttpRequest, ctx: InvocationContext): Promise<HttpResponseInit> {
-  const auth = requireAuth(req);
+  const auth = await requireAuth(req);
   if (!('email' in auth)) return auth;
   const caller = auth.email;
 
@@ -1188,7 +1236,7 @@ function calcCompleteness(body: CreateLocationBody): number {
 }
 
 async function createLocation(req: HttpRequest, ctx: InvocationContext): Promise<HttpResponseInit> {
-  const auth = requireAuth(req);
+  const auth = await requireAuth(req);
   if (!('email' in auth)) return auth;
   const caller = auth.email;
 

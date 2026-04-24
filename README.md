@@ -441,14 +441,30 @@ W Fabric: utwórz Lakehouse o nazwie `lh_mdm`, a następnie w Notebook (SQL cell
 <zawartość fabric/lakehouse/seed/seed_mdm_config_location.sql>
 ```
 
-### Krok 2 — Pierwsze ładowanie danych
+### Krok 2 — Fabric Environment (dependency `jellyfish`)
+
+Notebook `nb_match_location.py` wymaga biblioteki `jellyfish` (Jaro-Winkler). W Fabric:
+
+1. Workspace → **Environments** → New environment (np. `mdm-env`).
+2. Public libraries → Add from PyPI → `jellyfish==1.0.3` (patrz [fabric/notebooks/requirements.txt](fabric/notebooks/requirements.txt)).
+3. Publish środowiska.
+4. W każdym notebooku MDM (lub globalnie w workspace) ustaw **Environment = mdm-env**.
+
+Alternatywa ad-hoc — w samej komórce notebooka:
+```python
+%pip install jellyfish==1.0.3
+```
+
+**Uwaga:** od fazy 1 notebook rzuca `ImportError` (fail-fast) zamiast cicho degradować do Levenshteina.
+
+### Krok 3 — Pierwsze ładowanie danych
 
 ```
 Fabric Data Pipeline: PL_MDM_Master_Location
 Parametry: __paramFullLoad = true
 ```
 
-### Krok 3 — UI lokalnie (mock mode)
+### Krok 4 — UI lokalnie (mock mode)
 
 ```bash
 cd stewardship-ui
@@ -458,7 +474,7 @@ npm run dev
 # → http://localhost:3000
 ```
 
-### Krok 4 — UI produkcyjnie
+### Krok 5 — UI produkcyjnie
 
 ```bash
 # 1. Azure Portal: utwórz Static Web App
@@ -480,13 +496,23 @@ VITE_CLIENT_ID=<guid>
 ### Checklist
 
 - [ ] Fabric Lakehouse `lh_mdm` — DDL + seed
-- [ ] Azure AD App Registration — redirect URI na prod URL + localhost:3000
-- [ ] Azure Function App — Managed Identity włączona
+- [ ] Fabric **Environment** z `jellyfish==1.0.3` podłączony do notebooków MDM
+- [ ] Azure AD App Registration — redirect URI na prod URL + `localhost:3000`
+- [ ] Azure Function App — Managed Identity włączona + **AZURE_TENANT_ID** w App Settings (wymagane dla JWT verify)
 - [ ] MSI rola **Contributor** w Fabric Workspace
-- [ ] GitHub Secrets — 4 VITE_* zmienne + AZURE_STATIC_WEB_APPS_API_TOKEN
-- [ ] Fabric Workload manifest — uzupełnione placeholdery + ikony PNG
-- [ ] `pip install jellyfish` w Fabric Environment (dla nb_match_location)
+- [ ] Azure Function code deployed (`deploy-function.yml` lub ręcznie `az functionapp deployment source config-zip`)
+- [ ] Fabric Workload manifest — uzupełnione placeholdery (`__VITE_CLIENT_ID__`, `__FRONTEND_URL__`) + ikony PNG (`fabric/workload/FE/assets/mdm-icon-{32,44}.png`)
 - [ ] VNet Data Gateway lub Managed Private Endpoint — łączność do systemów źródłowych
+
+### GitHub Secrets — pełna lista
+
+| Secret | Workflow | Gdzie wziąć |
+|---|---|---|
+| `AZURE_STATIC_WEB_APPS_API_TOKEN` | `deploy-ui.yml` | Azure Portal → Static Web App → Manage deployment token |
+| `AZURE_FUNCTIONAPP_PUBLISH_PROFILE` | `deploy-function.yml` | `az functionapp deployment list-publishing-profiles -g rg-fabric-poc-sdc -n func-mdm-stewardship --xml` |
+| `VITE_WRITE_API_URL` | `deploy-ui.yml` | URL Function App, np. `https://func-mdm-stewardship.azurewebsites.net` |
+| `VITE_TENANT_ID` | `deploy-ui.yml` | Azure AD tenant GUID |
+| `VITE_CLIENT_ID` | `deploy-ui.yml` | App Registration client ID |
 
 ### Uwaga: Łączność Fabric → Źródła danych
 

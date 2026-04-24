@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    paths:
+      - 'azure-function/**'
+      - 'stewardship-ui/**'
+      - '.github/workflows/ci.yml'
+
+jobs:
+  function:
+    name: Azure Function — build & test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: azure-function
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: azure-function/package-lock.json
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Typecheck & build
+        run: npm run build
+
+      - name: Unit tests
+        run: npm test
+
+  ui:
+    name: Stewardship UI — build & test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: stewardship-ui
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: stewardship-ui/package-lock.json
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build (typecheck + vite)
+        env:
+          VITE_MOCK_MODE: 'true'
+        run: npm run build
