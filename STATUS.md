@@ -1,7 +1,7 @@
 # MDM Stewardship App — Status & Backlog
 
-> **Stan na:** 2026-04-25
-> **Wersja:** Faza 1–5 zakończone. **F0 (generalizacja) + F1 (legal_entity)** — implementacja w toku.
+> **Stan na:** 2026-04-27
+> **Wersja:** Build backend (Azure Function) i frontend (UI) zakończony sukcesem. Artefakty gotowe do deploymentu. Projekt przygotowany do wdrożenia zgodnie z instrukcją.
 > **Plik źródłowy planu:** ten dokument jest jedynym źródłem prawdy o tym co zostało do zrobienia. Przy zamykaniu zadań — zaznacz `[x]` i dopisz commit/PR.
 
 ---

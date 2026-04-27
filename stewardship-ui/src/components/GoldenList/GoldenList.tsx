@@ -1,33 +1,65 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useGoldenLocations } from '../../hooks/useMdm';
-import { MapPin, ChevronRight, ChevronLeft, AlertCircle } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import { getGoldenRecords, getEntitySchema } from '../../api/v2Api';
+import { useEntity } from '../../hooks/useEntity';
+import { MapPin, Building2, ChevronRight, ChevronLeft, AlertCircle } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import type { GenericGoldenRecord, FieldSchema } from '../../types/v2.types';
 
 const FLAG: Record<string, string> = {
-  DE: '🇩🇪', AT: '🇦🇹', CH: '🇨🇭', IT: '🇮🇹', NL: '🇳🇱', PL: '🇵🇱', FR: '🇫🇷', GB: '🇬🇧',
+  DE: '🇩🇪', AT: '🇦🇹', CH: '🇨🇭', IT: '🇮🇹', NL: '🇳🇱', PL: '🇵🇱', FR: '🇫🇷', GB: '🇬🇧', CZ: '🇨🇿',
 };
 
-function CompletenessBar({ score }: { score?: number }) {
-  if (score == null) return <span className="text-gray-300 text-xs">—</span>;
-  const pct = Math.round(score * 100);
-  const color = pct >= 90 ? 'bg-green-500' : pct >= 70 ? 'bg-amber-400' : 'bg-red-400';
-  return (
-    <div className="flex items-center gap-2">
-      <div className="w-20 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-        <div className={cn('h-full rounded-full', color)} style={{ width: `${pct}%` }} />
-      </div>
-      <span className="text-xs text-gray-500 tabular-nums">{pct}%</span>
-    </div>
-  );
+const ICON_MAP: Record<string, React.ReactNode> = {
+  MapPin: <MapPin size={12} className="text-blue-600" />,
+  Building2: <Building2 size={12} className="text-indigo-600" />,
+};
+
+/** Pick the best "display name" from a record's attributes */
+function displayName(rec: GenericGoldenRecord): string {
+  const a = rec.attributes;
+  return String(a.name ?? a.legal_entity_code ?? a.entity_code ?? Object.values(a)[0] ?? '—');
+}
+
+/** Pick up to N visible columns from schema (excluding the name column which is always shown) */
+function pickColumns(fields: FieldSchema[], max = 4): FieldSchema[] {
+  return fields
+    .filter(f => f.isGoldenField && f.fieldName !== 'name')
+    .sort((a, b) => a.displayOrder - b.displayOrder)
+    .slice(0, max);
+}
+
+function CellValue({ value, widget }: { value: unknown; widget: string }) {
+  if (value == null) return <span className="text-gray-300">—</span>;
+  if (widget === 'boolean') return <span>{value ? '✓' : '✗'}</span>;
+  const str = String(value);
+  if (widget === 'select' && FLAG[str]) return <>{FLAG[str]} {str}</>;
+  return <>{str}</>;
 }
 
 const PAGE_SIZE = 25;
 
 export function GoldenList() {
   const navigate = useNavigate();
+  const { entityId, selectedEntity } = useEntity();
   const [page, setPage] = useState(1);
-  const { data, isLoading, isError } = useGoldenLocations(page, PAGE_SIZE);
+
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['v2', 'golden', entityId, page, PAGE_SIZE],
+    queryFn: () => getGoldenRecords(entityId, page, PAGE_SIZE),
+    placeholderData: (prev) => prev,
+  });
+
+  const { data: schema } = useQuery({
+    queryKey: ['v2', 'schema', entityId],
+    queryFn: () => getEntitySchema(entityId),
+    staleTime: 5 * 60_000,
+  });
+
+  const columns = schema ? pickColumns(schema.fields) : [];
+  const icon = ICON_MAP[selectedEntity?.icon ?? 'MapPin'] ?? ICON_MAP.MapPin;
+  const entityLabel = selectedEntity?.displayLabelPl ?? 'Rekordy';
 
   if (isLoading) {
     return (
@@ -53,80 +85,90 @@ export function GoldenList() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-xl font-bold text-gray-900">Golden Records</h1>
-          <p className="text-sm text-gray-400 mt-0.5">{data.total} aktywnych lokalizacji</p>
+          <p className="text-sm text-gray-400 mt-0.5">
+            {data.total} {entityLabel.toLowerCase()}
+          </p>
         </div>
       </div>
 
-      {/* Table */}
-      <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-gray-100 bg-gray-50/60">
-              <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Nazwa</th>
-              <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Kraj</th>
-              <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Miasto</th>
-              <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Kompletność</th>
-              <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Źródła</th>
-              <th className="px-4 py-3" />
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-50">
-            {data.items.map((loc) => (
-              <tr
-                key={loc.locationHk}
-                onClick={() => navigate(`/golden/${loc.locationHk}`)}
-                className="hover:bg-blue-50/40 cursor-pointer transition-colors"
-              >
-                <td className="px-4 py-3">
-                  <div className="flex items-center gap-2">
-                    <div className="w-6 h-6 rounded-md bg-blue-100 flex items-center justify-center shrink-0">
-                      <MapPin size={12} className="text-blue-600" />
-                    </div>
-                    <span className="font-medium text-gray-900 truncate max-w-[220px]">{loc.name}</span>
-                  </div>
-                </td>
-                <td className="px-4 py-3 text-gray-600">
-                  {FLAG[loc.country ?? ''] ?? ''} {loc.country}
-                </td>
-                <td className="px-4 py-3 text-gray-600">{loc.city}</td>
-                <td className="px-4 py-3">
-                  <CompletenessBar score={loc.completenessScore} />
-                </td>
-                <td className="px-4 py-3">
-                  <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full tabular-nums">
-                    {loc.sourcesCount ?? 1} src
-                  </span>
-                </td>
-                <td className="px-4 py-3 text-gray-300">
-                  <ChevronRight size={16} />
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {/* Pagination */}
-      {totalPages > 1 && (
-        <div className="flex items-center justify-between mt-4 text-sm text-gray-500">
-          <span>Strona {page} z {totalPages}</span>
-          <div className="flex gap-2">
-            <button
-              onClick={() => setPage(p => Math.max(1, p - 1))}
-              disabled={page === 1}
-              className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              <ChevronLeft size={14} /> Poprzednia
-            </button>
-            <button
-              onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-              disabled={page === totalPages}
-              className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              Następna <ChevronRight size={14} />
-            </button>
+      {data.items.length === 0 ? (
+        <div className="text-center py-16 text-gray-400">
+          <p className="text-lg">Brak rekordów</p>
+          <p className="text-sm mt-1">Dodaj pierwszy rekord przez formularz "Nowy rekord"</p>
+        </div>
+      ) : (
+        <>
+          {/* Table */}
+          <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-100 bg-gray-50/60">
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Nazwa</th>
+                  {columns.map(col => (
+                    <th key={col.fieldName} className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                      {col.displayNamePl}
+                    </th>
+                  ))}
+                  <th className="px-4 py-3" />
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {data.items.map((rec) => (
+                  <tr
+                    key={rec.hk}
+                    onClick={() => navigate(`/golden/${rec.hk}`)}
+                    className="hover:bg-blue-50/40 cursor-pointer transition-colors"
+                  >
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        <div className={cn(
+                          "w-6 h-6 rounded-md flex items-center justify-center shrink-0",
+                          entityId === 'legal_entity' ? 'bg-indigo-100' : 'bg-blue-100'
+                        )}>
+                          {icon}
+                        </div>
+                        <span className="font-medium text-gray-900 truncate max-w-[220px]">
+                          {displayName(rec)}
+                        </span>
+                      </div>
+                    </td>
+                    {columns.map(col => (
+                      <td key={col.fieldName} className="px-4 py-3 text-gray-600">
+                        <CellValue value={rec.attributes[col.fieldName]} widget={col.uiWidget} />
+                      </td>
+                    ))}
+                    <td className="px-4 py-3 text-gray-300">
+                      <ChevronRight size={16} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-        </div>
+
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between mt-4 text-sm text-gray-500">
+              <span>Strona {page} z {totalPages}</span>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setPage(p => Math.max(1, p - 1))}
+                  disabled={page === 1}
+                  className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <ChevronLeft size={14} /> Poprzednia
+                </button>
+                <button
+                  onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                  disabled={page === totalPages}
+                  className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Następna <ChevronRight size={14} />
+                </button>
+              </div>
+            </div>
+          )}
+        </>
       )}
     </div>
   );

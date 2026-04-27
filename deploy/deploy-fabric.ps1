@@ -23,8 +23,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$WorkspaceId,
 
-    [string]$LakehouseName = $LakehouseName,
-    [string]$WarehouseName = $WarehouseName,
+    [string]$LakehouseName = "lh_mdm",
+    [string]$WarehouseName = "wh_mdm",
 
     # JSON z mapą schema placeholderów dla apply-warehouse-ddl.js, np.
     # '{"SCHEMA_BRONZE":"bronze","SCHEMA_SILVER":"silver_dv","SCHEMA_GOLD":"gold","SCHEMA_CONFIG":"mdm_config"}'
@@ -295,7 +295,7 @@ $existingLh = (Invoke-Fabric GET "/workspaces/$WorkspaceId/lakehouses").value `
 
 if ($existingLh) {
     $LAKEHOUSE_ID = $existingLh.id
-    OK "Lakehouse $LakehouseName już istnieje (id=$LAKEHOUSE_ID)"
+    OK "Lakehouse $LakehouseName już istnieje [id=$LAKEHOUSE_ID]"
     Warn "  Jeśli lakehouse był utworzony bez enableSchemas, CREATE SCHEMA nie zadziała — usuń i redeploy."
 } else {
     # Create z enableSchemas — operacja jest async (202 + operation-id)
@@ -311,7 +311,7 @@ if ($existingLh) {
 
     if ($resp.StatusCode -eq 201) {
         $LAKEHOUSE_ID = ($resp.Content | ConvertFrom-Json).id
-        OK "Lakehouse utworzony (sync, id=$LAKEHOUSE_ID)"
+        OK "Lakehouse utworzony [sync, id=$LAKEHOUSE_ID]"
     } elseif ($resp.StatusCode -eq 202) {
         $opId = $resp.Headers.'x-ms-operation-id' | Select-Object -First 1
         if (-not $opId) { $opId = $resp.Headers.'X-Ms-Operation-Id' | Select-Object -First 1 }
@@ -327,7 +327,7 @@ if ($existingLh) {
             | Where-Object { $_.displayName -eq $LakehouseName } | Select-Object -First 1
         if (-not $existingLh) { Fail "Lakehouse $LakehouseName not found after async create" }
         $LAKEHOUSE_ID = $existingLh.id
-        OK "Lakehouse $LakehouseName utworzony (id=$LAKEHOUSE_ID, schemas=enabled)"
+        OK "Lakehouse $LakehouseName utworzony [id=$LAKEHOUSE_ID, schemas enabled]"
     } else {
         Fail "Unexpected status code: $($resp.StatusCode)"
     }
@@ -339,7 +339,7 @@ $existingWh = (Invoke-Fabric GET "/workspaces/$WorkspaceId/warehouses").value `
     | Where-Object { $_.displayName -eq $WarehouseName } | Select-Object -First 1
 if ($existingWh) {
     $WAREHOUSE_ID = $existingWh.id
-    OK "Warehouse $WarehouseName juz istnieje (id=$WAREHOUSE_ID)"
+    OK "Warehouse $WarehouseName juz istnieje [id=$WAREHOUSE_ID]"
 } else {
     $whBody = @{
         displayName = $WarehouseName
@@ -350,7 +350,7 @@ if ($existingWh) {
         -Headers $HEADERS -Body $whBody -UseBasicParsing
     if ($whResp.StatusCode -eq 201) {
         $WAREHOUSE_ID = ($whResp.Content | ConvertFrom-Json).id
-        OK "Warehouse utworzony (sync, id=$WAREHOUSE_ID)"
+        OK "Warehouse utworzony [sync, id=$WAREHOUSE_ID]"
     } elseif ($whResp.StatusCode -eq 202) {
         $opId = $whResp.Headers.'x-ms-operation-id' | Select-Object -First 1
         if (-not $opId) { $opId = $whResp.Headers.'X-Ms-Operation-Id' | Select-Object -First 1 }
@@ -365,7 +365,7 @@ if ($existingWh) {
             | Where-Object { $_.displayName -eq $WarehouseName } | Select-Object -First 1
         if (-not $existingWh) { Fail "Warehouse $WarehouseName not found after async create" }
         $WAREHOUSE_ID = $existingWh.id
-        OK "Warehouse $WarehouseName utworzony (id=$WAREHOUSE_ID)"
+        OK "Warehouse $WarehouseName utworzony [id=$WAREHOUSE_ID]"
     } else {
         Fail "Unexpected status code: $($whResp.StatusCode)"
     }
