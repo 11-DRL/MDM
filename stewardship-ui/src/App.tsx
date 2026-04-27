@@ -2,7 +2,7 @@ import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-do
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MsalProvider, AuthenticatedTemplate, UnauthenticatedTemplate } from '@azure/msal-react';
 import { Toaster } from 'sonner';
-import { msalInstance, MOCK_MODE } from './api/mdmApi';
+import { msalInstance, MOCK_MODE, API_SCOPE } from './api/mdmApi';
 import { fabricHost } from './lib/fabricHost';
 import { ReviewQueue } from './components/ReviewQueue/ReviewQueue';
 import { PairDetail } from './components/PairDetail/PairDetail';
@@ -10,6 +10,10 @@ import { GoldenViewer } from './components/GoldenViewer/GoldenViewer';
 import { GoldenList } from './components/GoldenList/GoldenList';
 import { NewLocationForm } from './components/NewLocationForm/NewLocationForm';
 import { ConfigViewer } from './components/ConfigViewer/ConfigViewer';
+import { NotFound } from './components/NotFound/NotFound';
+import { EntitySelector } from './components/EntitySelector/EntitySelector';
+import { EntityForm } from './components/EntityForm/EntityForm';
+import { EntityProvider, useEntity } from './hooks/useEntity';
 import { LayoutDashboard, ListChecks, MapPin, Settings, PlusCircle } from 'lucide-react';
 import { cn } from './lib/utils';
 
@@ -33,6 +37,9 @@ function NavItem({ to, label, icon }: { to: string; label: string; icon: React.R
 }
 
 function Layout({ children }: { children: React.ReactNode }) {
+  const { selectedEntity } = useEntity();
+  const hasMatching = selectedEntity?.hasMatching ?? true;
+
   return (
     <div className="flex h-screen bg-gray-50 overflow-hidden">
       {/* Sidebar */}
@@ -44,22 +51,31 @@ function Layout({ children }: { children: React.ReactNode }) {
             </div>
             <div>
               <p className="text-sm font-bold text-gray-900">MDM</p>
-              <p className="text-xs text-gray-400">L'Osteria</p>
+              <p className="text-xs text-gray-400">Stewardship</p>
             </div>
           </div>
         </div>
-        <NavItem to="/queue"  label="Review Queue" icon={<ListChecks size={16} />} />
+
+        {/* Entity selector */}
+        <EntitySelector />
+
+        <div className="my-2 border-t border-gray-100" />
+
+        {/* Navigation — conditional on entity capabilities */}
+        {hasMatching && (
+          <NavItem to="/queue" label="Review Queue" icon={<ListChecks size={16} />} />
+        )}
         <NavItem to="/golden" label="Golden Records" icon={<MapPin size={16} />} />
         <NavItem to="/config" label="Konfiguracja" icon={<Settings size={16} />} />
         {/* Separator */}
         <div className="mt-2 pt-2 border-t border-gray-100">
-          <NavLink to="/locations/new" className={({ isActive }) =>
+          <NavLink to="/new" className={({ isActive }) =>
             cn("flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors",
                isActive ? "bg-blue-50 text-blue-700 font-semibold"
                         : "text-blue-600 hover:bg-blue-50 font-medium")
           }>
             <PlusCircle size={16} />
-            Nowa lokalizacja
+            Nowy rekord
           </NavLink>
         </div>
       </aside>
@@ -78,9 +94,9 @@ function LoginPage() {
           <MapPin size={28} className="text-white" />
         </div>
         <h1 className="text-2xl font-bold text-gray-900 mb-1">MDM Stewardship</h1>
-        <p className="text-gray-400 text-sm mb-6">L'Osteria Business Location</p>
+        <p className="text-gray-400 text-sm mb-6">Konsolidacja danych referencyjnych</p>
         <button
-          onClick={() => msalInstance.loginRedirect({ scopes: ['User.Read'] })}
+          onClick={() => msalInstance.loginRedirect({ scopes: [API_SCOPE] })}
           className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2.5 px-4 rounded-xl transition-colors"
         >
           Zaloguj przez Azure AD
@@ -91,25 +107,34 @@ function LoginPage() {
 }
 
 export default function App() {
+  const appRoutes = (
+    <>
+      <Route path="/" element={<Navigate to="/queue" replace />} />
+      {/* V1 legacy routes (business_location) */}
+      <Route path="/queue"              element={<ReviewQueue />} />
+      <Route path="/pairs/:pairId"      element={<PairDetail />} />
+      <Route path="/golden"             element={<GoldenList />} />
+      <Route path="/golden/:locationHk" element={<GoldenViewer />} />
+      <Route path="/config"             element={<ConfigViewer />} />
+      <Route path="/locations/new"      element={<NewLocationForm />} />
+      {/* V2 generic entity form */}
+      <Route path="/new"                element={<EntityForm />} />
+      <Route path="*" element={<NotFound />} />
+    </>
+  );
+
   // Tryb 1: Mock — local dev bez żadnej konfiguracji
   if (MOCK_MODE) {
     return (
       <QueryClientProvider client={queryClient}>
-        <Toaster position="top-right" richColors closeButton />
-        <BrowserRouter>
-          <Layout>
-            <Routes>
-              <Route path="/" element={<Navigate to="/queue" replace />} />
-              <Route path="/queue"              element={<ReviewQueue />} />
-              <Route path="/pairs/:pairId"      element={<PairDetail />} />
-              <Route path="/golden"             element={<GoldenList />} />
-              <Route path="/golden/:locationHk" element={<GoldenViewer />} />
-              <Route path="/config"             element={<ConfigViewer />} />
-              <Route path="/locations/new"      element={<NewLocationForm />} />
-              <Route path="*" element={<Navigate to="/queue" replace />} />
-            </Routes>
-          </Layout>
-        </BrowserRouter>
+        <EntityProvider>
+          <Toaster position="top-right" richColors closeButton />
+          <BrowserRouter>
+            <Layout>
+              <Routes>{appRoutes}</Routes>
+            </Layout>
+          </BrowserRouter>
+        </EntityProvider>
       </QueryClientProvider>
     );
   }
@@ -118,21 +143,14 @@ export default function App() {
   if (fabricHost.isInsideFabric) {
     return (
       <QueryClientProvider client={queryClient}>
-        <Toaster position="top-right" richColors closeButton />
-        <BrowserRouter>
-          <Layout>
-            <Routes>
-              <Route path="/" element={<Navigate to="/queue" replace />} />
-              <Route path="/queue"              element={<ReviewQueue />} />
-              <Route path="/pairs/:pairId"      element={<PairDetail />} />
-              <Route path="/golden"             element={<GoldenList />} />
-              <Route path="/golden/:locationHk" element={<GoldenViewer />} />
-              <Route path="/config"             element={<ConfigViewer />} />
-              <Route path="/locations/new"      element={<NewLocationForm />} />
-              <Route path="*" element={<Navigate to="/queue" replace />} />
-            </Routes>
-          </Layout>
-        </BrowserRouter>
+        <EntityProvider>
+          <Toaster position="top-right" richColors closeButton />
+          <BrowserRouter>
+            <Layout>
+              <Routes>{appRoutes}</Routes>
+            </Layout>
+          </BrowserRouter>
+        </EntityProvider>
       </QueryClientProvider>
     );
   }
@@ -141,26 +159,19 @@ export default function App() {
   return (
     <MsalProvider instance={msalInstance}>
       <QueryClientProvider client={queryClient}>
-        <Toaster position="top-right" richColors closeButton />
-        <UnauthenticatedTemplate>
-          <LoginPage />
-        </UnauthenticatedTemplate>
-        <AuthenticatedTemplate>
-          <BrowserRouter>
-            <Layout>
-              <Routes>
-                <Route path="/" element={<Navigate to="/queue" replace />} />
-                <Route path="/queue"            element={<ReviewQueue />} />
-                <Route path="/pairs/:pairId"    element={<PairDetail />} />
-                <Route path="/golden"           element={<GoldenList />} />
-                <Route path="/golden/:locationHk" element={<GoldenViewer />} />
-                <Route path="/config"           element={<ConfigViewer />} />
-                <Route path="/locations/new"    element={<NewLocationForm />} />
-                <Route path="*" element={<Navigate to="/queue" replace />} />
-              </Routes>
-            </Layout>
-          </BrowserRouter>
-        </AuthenticatedTemplate>
+        <EntityProvider>
+          <Toaster position="top-right" richColors closeButton />
+          <UnauthenticatedTemplate>
+            <LoginPage />
+          </UnauthenticatedTemplate>
+          <AuthenticatedTemplate>
+            <BrowserRouter>
+              <Layout>
+                <Routes>{appRoutes}</Routes>
+              </Layout>
+            </BrowserRouter>
+          </AuthenticatedTemplate>
+        </EntityProvider>
       </QueryClientProvider>
     </MsalProvider>
   );

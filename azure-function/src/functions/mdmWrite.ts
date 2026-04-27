@@ -2,311 +2,24 @@
 // Read + write traffic goes through this API. DB connectivity uses Managed Identity.
 
 import { app, HttpRequest, HttpResponseInit, InvocationContext } from '@azure/functions';
-import { DefaultAzureCredential, type AccessToken } from '@azure/identity';
-import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
 import * as crypto from 'crypto';
-import * as sql from 'tedious';
+import { S } from '../lib/schemas';
+import { requireAuth, validateBearerToken, type AuthResult } from '../lib/auth';
+import {
+  getSqlAccessToken, getConnection, sqlTypeForValue, addSqlParameters,
+  withRetry, execSql, execSqlWithRowCount, querySql,
+} from '../lib/sqlHelpers';
+import {
+  asString, asNumber, asBoolean, asIso,
+  sanitizeHex32, parsePositiveInt, parseStatus,
+  sanitizeEntityId, toMatchSource,
+  type MatchSource, type MatchStatus,
+} from '../lib/helpers';
 
-type MatchSource = 'lightspeed' | 'yext' | 'mcwin' | 'gopos' | 'manual';
-type MatchStatus = 'pending' | 'accepted' | 'rejected' | 'auto_accepted';
+// Re-export for tests that import from mdmWrite
+export { sanitizeHex32, parsePositiveInt, parseStatus, sanitizeEntityId, toMatchSource, validateBearerToken };
+
 type QueryRows = Record<string, unknown>[];
-
-const HEX_32_RE = /^[0-9a-f]{64}$/i;
-const SAFE_ENTITY_ID_RE = /^[a-z0-9_]+$/i;
-
-// ---------- Auth ----------
-
-type AuthResult = { ok: true; email: string } | { ok: false; status: 401 | 403 | 500; error: string };
-
-// JWKS cache — jeden obiekt per tenant, tworzony lazy i reużywany (biblioteka jose trzyma własny in-memory cache kluczy z TTL).
-let cachedJwks: ReturnType<typeof createRemoteJWKSet> | null = null;
-let cachedJwksTenant: string | null = null;
-
-function getJwks(tenantId: string) {
-  if (!cachedJwks || cachedJwksTenant !== tenantId) {
-    cachedJwks = createRemoteJWKSet(
-      new URL(`https://login.microsoftonline.com/${tenantId}/discovery/v2.0/keys`),
-    );
-    cachedJwksTenant = tenantId;
-  }
-  return cachedJwks;
-}
-
-function extractEmail(payload: JWTPayload): string {
-  const p = payload as Record<string, unknown>;
-  return (
-    (p.preferred_username as string | undefined) ??
-    (p.upn as string | undefined) ??
-    (p.email as string | undefined) ??
-    (p.unique_name as string | undefined) ??
-    'unknown'
-  );
-}
-
-export async function validateBearerToken(req: HttpRequest): Promise<AuthResult> {
-  const authHeader = req.headers.get('authorization') ?? req.headers.get('Authorization');
-  if (!authHeader?.startsWith('Bearer ')) {
-    return { ok: false, status: 401, error: 'Missing or invalid Authorization header' };
-  }
-
-  const token = authHeader.slice(7);
-  const tenantId = process.env.AZURE_TENANT_ID;
-
-  if (!tenantId) {
-    // Brak konfiguracji = fail-closed. Ops musi ustawić AZURE_TENANT_ID w Function App settings.
-    return { ok: false, status: 500, error: 'AZURE_TENANT_ID not configured on server' };
-  }
-
-  try {
-    // Akceptujemy zarówno wydawców v1 (sts.windows.net) jak i v2 (login.microsoftonline.com).
-    // Nie sprawdzamy audience — UI może przekazywać token Graph (User.Read) lub API.
-    // Bezpieczeństwo opiera się na: (1) poprawnym podpisie klucza Azure AD, (2) zgodności tenanta, (3) aktualności exp.
-    const v1Issuer = `https://sts.windows.net/${tenantId}/`;
-    const v2Issuer = `https://login.microsoftonline.com/${tenantId}/v2.0`;
-
-    const { payload } = await jwtVerify(token, getJwks(tenantId), {
-      issuer: [v1Issuer, v2Issuer],
-      clockTolerance: 5,
-    });
-
-    if (payload.tid && payload.tid !== tenantId) {
-      return { ok: false, status: 403, error: 'Token tenant mismatch' };
-    }
-
-    return { ok: true, email: extractEmail(payload) };
-  } catch (err) {
-    const code = (err as { code?: string })?.code ?? '';
-    const message = (err as Error)?.message ?? 'unknown';
-
-    if (code === 'ERR_JWT_EXPIRED') return { ok: false, status: 401, error: 'Token expired' };
-    if (code === 'ERR_JWS_SIGNATURE_VERIFICATION_FAILED') return { ok: false, status: 401, error: 'Invalid token signature' };
-    if (code === 'ERR_JWT_CLAIM_VALIDATION_FAILED') return { ok: false, status: 401, error: `Invalid token claim: ${message}` };
-    if (code === 'ERR_JWS_INVALID' || code === 'ERR_JWT_INVALID') return { ok: false, status: 401, error: 'Malformed JWT' };
-
-    return { ok: false, status: 401, error: `Token validation failed: ${message}` };
-  }
-}
-
-async function requireAuth(req: HttpRequest): Promise<{ ok: true; email: string } | HttpResponseInit> {
-  const result = await validateBearerToken(req);
-  if (!result.ok) return { status: result.status, jsonBody: { error: result.error } };
-  return result;
-}
-
-// ---------- DB ----------
-
-const SQL_SCOPE = 'https://database.windows.net/.default';
-const credential = new DefaultAzureCredential();
-let cachedToken: AccessToken | null = null;
-
-async function getSqlAccessToken(): Promise<string> {
-  const now = Date.now();
-  // Refresh 5 minutes before expiry
-  if (cachedToken && cachedToken.expiresOnTimestamp - now > 5 * 60 * 1000) {
-    return cachedToken.token;
-  }
-  const token = await credential.getToken(SQL_SCOPE);
-  if (!token) throw new Error('Failed to acquire Azure AD token for Fabric SQL');
-  cachedToken = token;
-  return token.token;
-}
-
-async function getConnection(): Promise<sql.Connection> {
-  const token = await getSqlAccessToken();
-  const config: sql.ConnectionConfiguration = {
-    server: process.env.FABRIC_SQL_SERVER!,
-    authentication: { type: 'azure-active-directory-access-token', options: { token } },
-    options: {
-      database: process.env.FABRIC_DATABASE ?? 'lh_mdm',
-      encrypt: true,
-      port: 1433,
-      trustServerCertificate: false,
-      connectTimeout: 30_000,
-      requestTimeout: 60_000,
-    },
-  };
-  return new sql.Connection(config);
-}
-
-function sqlTypeForValue(value: unknown) {
-  if (typeof value === 'bigint') return sql.TYPES.BigInt;
-  if (typeof value === 'number') {
-    if (!Number.isInteger(value)) return sql.TYPES.Float;
-    return (value > 2147483647 || value < -2147483648) ? sql.TYPES.BigInt : sql.TYPES.Int;
-  }
-  if (typeof value === 'boolean') return sql.TYPES.Bit;
-  if (value instanceof Date) return sql.TYPES.DateTime2;
-  if (Buffer.isBuffer(value)) return sql.TYPES.VarBinary;
-  return sql.TYPES.NVarChar;
-}
-
-function addSqlParameters(req: sql.Request, params: Record<string, unknown>) {
-  for (const [name, value] of Object.entries(params)) {
-    req.addParameter(name, sqlTypeForValue(value), value as never);
-  }
-}
-
-async function withRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
-  let lastError: unknown;
-  for (let i = 0; i < attempts; i++) {
-    try {
-      return await fn();
-    } catch (err) {
-      lastError = err;
-      if (i < attempts - 1) {
-        await new Promise(resolve => setTimeout(resolve, 200 * Math.pow(2, i)));
-      }
-    }
-  }
-  throw lastError;
-}
-
-async function execSql(query: string, params: Record<string, unknown> = {}): Promise<void> {
-  return withRetry(() => new Promise(async (resolve, reject) => {
-    let conn: sql.Connection;
-    try {
-      conn = await getConnection();
-    } catch (err) {
-      return reject(err);
-    }
-    conn.on('connect', (err) => {
-      if (err) return reject(err);
-
-      const request = new sql.Request(query, (requestErr) => {
-        conn.close();
-        if (requestErr) reject(requestErr);
-        else resolve();
-      });
-
-      addSqlParameters(request, params);
-      conn.execSql(request);
-    });
-    conn.connect();
-  }));
-}
-
-async function execSqlWithRowCount(query: string, params: Record<string, unknown> = {}): Promise<number> {
-  return withRetry(() => new Promise<number>(async (resolve, reject) => {
-    let conn: sql.Connection;
-    try {
-      conn = await getConnection();
-    } catch (err) {
-      return reject(err);
-    }
-    conn.on('connect', (err) => {
-      if (err) return reject(err);
-
-      const request = new sql.Request(query, (requestErr, rowCount) => {
-        conn.close();
-        if (requestErr) reject(requestErr);
-        else resolve(rowCount ?? 0);
-      });
-
-      addSqlParameters(request, params);
-      conn.execSql(request);
-    });
-    conn.connect();
-  }));
-}
-
-async function querySql<T = Record<string, unknown>>(query: string, params: Record<string, unknown> = {}): Promise<T[]> {
-  return withRetry(() => new Promise(async (resolve, reject) => {
-    let conn: sql.Connection;
-    try {
-      conn = await getConnection();
-    } catch (err) {
-      return reject(err);
-    }
-    const rows: T[] = [];
-
-    conn.on('connect', (err) => {
-      if (err) return reject(err);
-
-      const request = new sql.Request(query, (requestErr) => {
-        conn.close();
-        if (requestErr) reject(requestErr);
-        else resolve(rows);
-      });
-
-      request.on('row', (columns: Array<{ metadata: { colName: string }; value: unknown }>) => {
-        const row: Record<string, unknown> = {};
-        for (const col of columns) {
-          row[col.metadata.colName] = col.value;
-        }
-        rows.push(row as T);
-      });
-
-      addSqlParameters(request, params);
-      conn.execSql(request);
-    });
-    conn.connect();
-  }));
-}
-
-// ---------- Helpers ----------
-
-function asString(value: unknown): string | undefined {
-  if (value === null || value === undefined) return undefined;
-  if (typeof value === 'string') return value;
-  return String(value);
-}
-
-function asNumber(value: unknown, fallback = 0): number {
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-function asBoolean(value: unknown): boolean | undefined {
-  if (typeof value === 'boolean') return value;
-  if (value === null || value === undefined) return undefined;
-  if (typeof value === 'number') return value !== 0;
-  if (typeof value === 'string') {
-    const norm = value.trim().toLowerCase();
-    if (norm === 'true' || norm === '1') return true;
-    if (norm === 'false' || norm === '0') return false;
-  }
-  return undefined;
-}
-
-function asIso(value: unknown): string | undefined {
-  if (value instanceof Date) return value.toISOString();
-  if (typeof value === 'string' && value.trim().length > 0) return value;
-  return undefined;
-}
-
-export function sanitizeHex32(value: string | null | undefined): string | null {
-  if (!value) return null;
-  const trimmed = value.trim();
-  if (!HEX_32_RE.test(trimmed)) return null;
-  return trimmed.toLowerCase();
-}
-
-export function parsePositiveInt(rawValue: string | null, defaultValue: number, min: number, max: number): number {
-  const parsed = Number(rawValue ?? defaultValue);
-  if (!Number.isFinite(parsed)) return defaultValue;
-  return Math.min(max, Math.max(min, Math.trunc(parsed)));
-}
-
-export function parseStatus(raw: string | null): 'pending' | 'all' {
-  return raw?.toLowerCase() === 'all' ? 'all' : 'pending';
-}
-
-export function sanitizeEntityId(raw: string | null): string {
-  const value = raw?.trim() || 'business_location';
-  if (!SAFE_ENTITY_ID_RE.test(value)) {
-    throw new Error('Invalid entityId');
-  }
-  return value;
-}
-
-export function toMatchSource(value: unknown): MatchSource {
-  const raw = String(value ?? '').toLowerCase();
-  if (raw === 'lightspeed' || raw === 'yext' || raw === 'mcwin' || raw === 'gopos' || raw === 'manual') {
-    return raw;
-  }
-  return 'lightspeed';
-}
 
 // ---------- Read: queue stats ----------
 
@@ -321,9 +34,9 @@ async function getQueueStats(req: HttpRequest, ctx: InvocationContext): Promise<
         COALESCE(SUM(CASE WHEN status = 'auto_accepted' THEN 1 ELSE 0 END), 0) AS autoAcceptedCount,
         COALESCE(SUM(CASE WHEN status = 'accepted'      THEN 1 ELSE 0 END), 0) AS acceptedCount,
         COALESCE(SUM(CASE WHEN status = 'rejected'      THEN 1 ELSE 0 END), 0) AS rejectedCount,
-        (SELECT COUNT(*) FROM gold.dim_location WHERE is_current = 1)           AS totalGoldenRecords,
-        COALESCE(CAST((SELECT AVG(completeness_score) FROM gold.dim_location_quality) AS FLOAT), 0.0) AS avgCompletenessScore
-      FROM silver_dv.bv_location_match_candidates
+        (SELECT COUNT(*) FROM ${S.gold}.dim_location WHERE is_current = 1)           AS totalGoldenRecords,
+        COALESCE(CAST((SELECT AVG(completeness_score) FROM ${S.gold}.dim_location_quality) AS FLOAT), 0.0) AS avgCompletenessScore
+      FROM ${S.silver}.bv_location_match_candidates
     `);
 
     const row = rows[0] ?? {};
@@ -379,17 +92,17 @@ async function getMatchCandidates(req: HttpRequest, ctx: InvocationContext): Pro
         COALESCE(ls_r.name, ys_r.name, ms_r.restaurant_name, gs_r.location_name, man_r.name) AS rightName,
         COALESCE(ls_r.country, ys_r.country_code, ms_r.country, gs_r.country, man_r.country)  AS rightCountry,
         COALESCE(ls_r.city_std, ys_r.city, ms_r.city, gs_r.city, man_r.city)                   AS rightCity
-      FROM silver_dv.bv_location_match_candidates mc
-      LEFT JOIN silver_dv.sat_location_lightspeed ls_l ON mc.hk_left = ls_l.location_hk AND ls_l.load_end_date IS NULL
-      LEFT JOIN silver_dv.sat_location_yext       ys_l ON mc.hk_left = ys_l.location_hk AND ys_l.load_end_date IS NULL
-      LEFT JOIN silver_dv.sat_location_mcwin      ms_l ON mc.hk_left = ms_l.location_hk AND ms_l.load_end_date IS NULL
-      LEFT JOIN silver_dv.sat_location_gopos      gs_l ON mc.hk_left = gs_l.location_hk AND gs_l.load_end_date IS NULL
-      LEFT JOIN silver_dv.sat_location_manual     man_l ON mc.hk_left = man_l.location_hk AND man_l.load_end_date IS NULL
-      LEFT JOIN silver_dv.sat_location_lightspeed ls_r ON mc.hk_right = ls_r.location_hk AND ls_r.load_end_date IS NULL
-      LEFT JOIN silver_dv.sat_location_yext       ys_r ON mc.hk_right = ys_r.location_hk AND ys_r.load_end_date IS NULL
-      LEFT JOIN silver_dv.sat_location_mcwin      ms_r ON mc.hk_right = ms_r.location_hk AND ms_r.load_end_date IS NULL
-      LEFT JOIN silver_dv.sat_location_gopos      gs_r ON mc.hk_right = gs_r.location_hk AND gs_r.load_end_date IS NULL
-      LEFT JOIN silver_dv.sat_location_manual     man_r ON mc.hk_right = man_r.location_hk AND man_r.load_end_date IS NULL
+      FROM ${S.silver}.bv_location_match_candidates mc
+      LEFT JOIN ${S.silver}.sat_location_lightspeed ls_l ON mc.hk_left = ls_l.location_hk AND ls_l.load_end_date IS NULL
+      LEFT JOIN ${S.silver}.sat_location_yext       ys_l ON mc.hk_left = ys_l.location_hk AND ys_l.load_end_date IS NULL
+      LEFT JOIN ${S.silver}.sat_location_mcwin      ms_l ON mc.hk_left = ms_l.location_hk AND ms_l.load_end_date IS NULL
+      LEFT JOIN ${S.silver}.sat_location_gopos      gs_l ON mc.hk_left = gs_l.location_hk AND gs_l.load_end_date IS NULL
+      LEFT JOIN ${S.silver}.sat_location_manual     man_l ON mc.hk_left = man_l.location_hk AND man_l.load_end_date IS NULL
+      LEFT JOIN ${S.silver}.sat_location_lightspeed ls_r ON mc.hk_right = ls_r.location_hk AND ls_r.load_end_date IS NULL
+      LEFT JOIN ${S.silver}.sat_location_yext       ys_r ON mc.hk_right = ys_r.location_hk AND ys_r.load_end_date IS NULL
+      LEFT JOIN ${S.silver}.sat_location_mcwin      ms_r ON mc.hk_right = ms_r.location_hk AND ms_r.load_end_date IS NULL
+      LEFT JOIN ${S.silver}.sat_location_gopos      gs_r ON mc.hk_right = gs_r.location_hk AND gs_r.load_end_date IS NULL
+      LEFT JOIN ${S.silver}.sat_location_manual     man_r ON mc.hk_right = man_r.location_hk AND man_r.load_end_date IS NULL
       ${whereClause}
       ORDER BY mc.match_score DESC
       OFFSET ${offset} ROWS FETCH NEXT ${pageSize} ROWS ONLY
@@ -397,7 +110,7 @@ async function getMatchCandidates(req: HttpRequest, ctx: InvocationContext): Pro
 
     const countRows = await querySql<Record<string, unknown>>(`
       SELECT COUNT(*) AS total
-      FROM silver_dv.bv_location_match_candidates mc
+      FROM ${S.silver}.bv_location_match_candidates mc
       ${whereClause}
     `);
 
@@ -509,17 +222,17 @@ async function getPair(req: HttpRequest, ctx: InvocationContext): Promise<HttpRe
           WHEN gs_r.location_hk IS NOT NULL THEN 'gopos'
           ELSE 'lightspeed'
         END AS rightSource
-      FROM silver_dv.bv_location_match_candidates mc
-      LEFT JOIN silver_dv.sat_location_lightspeed ls_l ON mc.hk_left  = ls_l.location_hk AND ls_l.load_end_date IS NULL
-      LEFT JOIN silver_dv.sat_location_yext       ys_l ON mc.hk_left  = ys_l.location_hk AND ys_l.load_end_date IS NULL
-      LEFT JOIN silver_dv.sat_location_mcwin      ms_l ON mc.hk_left  = ms_l.location_hk AND ms_l.load_end_date IS NULL
-      LEFT JOIN silver_dv.sat_location_gopos      gs_l ON mc.hk_left  = gs_l.location_hk AND gs_l.load_end_date IS NULL
-      LEFT JOIN silver_dv.sat_location_manual     man_l ON mc.hk_left = man_l.location_hk AND man_l.load_end_date IS NULL
-      LEFT JOIN silver_dv.sat_location_lightspeed ls_r ON mc.hk_right = ls_r.location_hk AND ls_r.load_end_date IS NULL
-      LEFT JOIN silver_dv.sat_location_yext       ys_r ON mc.hk_right = ys_r.location_hk AND ys_r.load_end_date IS NULL
-      LEFT JOIN silver_dv.sat_location_mcwin      ms_r ON mc.hk_right = ms_r.location_hk AND ms_r.load_end_date IS NULL
-      LEFT JOIN silver_dv.sat_location_gopos      gs_r ON mc.hk_right = gs_r.location_hk AND gs_r.load_end_date IS NULL
-      LEFT JOIN silver_dv.sat_location_manual     man_r ON mc.hk_right = man_r.location_hk AND man_r.load_end_date IS NULL
+      FROM ${S.silver}.bv_location_match_candidates mc
+      LEFT JOIN ${S.silver}.sat_location_lightspeed ls_l ON mc.hk_left  = ls_l.location_hk AND ls_l.load_end_date IS NULL
+      LEFT JOIN ${S.silver}.sat_location_yext       ys_l ON mc.hk_left  = ys_l.location_hk AND ys_l.load_end_date IS NULL
+      LEFT JOIN ${S.silver}.sat_location_mcwin      ms_l ON mc.hk_left  = ms_l.location_hk AND ms_l.load_end_date IS NULL
+      LEFT JOIN ${S.silver}.sat_location_gopos      gs_l ON mc.hk_left  = gs_l.location_hk AND gs_l.load_end_date IS NULL
+      LEFT JOIN ${S.silver}.sat_location_manual     man_l ON mc.hk_left = man_l.location_hk AND man_l.load_end_date IS NULL
+      LEFT JOIN ${S.silver}.sat_location_lightspeed ls_r ON mc.hk_right = ls_r.location_hk AND ls_r.load_end_date IS NULL
+      LEFT JOIN ${S.silver}.sat_location_yext       ys_r ON mc.hk_right = ys_r.location_hk AND ys_r.load_end_date IS NULL
+      LEFT JOIN ${S.silver}.sat_location_mcwin      ms_r ON mc.hk_right = ms_r.location_hk AND ms_r.load_end_date IS NULL
+      LEFT JOIN ${S.silver}.sat_location_gopos      gs_r ON mc.hk_right = gs_r.location_hk AND gs_r.load_end_date IS NULL
+      LEFT JOIN ${S.silver}.sat_location_manual     man_r ON mc.hk_right = man_r.location_hk AND man_r.load_end_date IS NULL
       WHERE mc.pair_id = @pairId
     `, { pairId });
 
@@ -614,7 +327,7 @@ async function getGoldenLocations(req: HttpRequest, ctx: InvocationContext): Pro
           sources_count,
           completeness_score,
           ROW_NUMBER() OVER (PARTITION BY location_hk ORDER BY snapshot_date DESC) AS rn
-        FROM gold.dim_location_quality
+        FROM ${S.gold}.dim_location_quality
       )
       SELECT
         CONVERT(VARCHAR(64), g.location_hk, 2) AS locationHk,
@@ -638,7 +351,7 @@ async function getGoldenLocations(req: HttpRequest, ctx: InvocationContext): Pro
         g.gopos_location_id AS goposLocationId,
         CAST(q.completeness_score AS FLOAT) AS completenessScore,
         q.sources_count AS sourcesCount
-      FROM gold.dim_location g
+      FROM ${S.gold}.dim_location g
       LEFT JOIN quality_latest q
         ON g.location_hk = q.location_hk AND q.rn = 1
       WHERE g.is_current = 1
@@ -647,7 +360,7 @@ async function getGoldenLocations(req: HttpRequest, ctx: InvocationContext): Pro
     `);
 
     const countRows = await querySql<Record<string, unknown>>(`
-      SELECT COUNT(*) AS total FROM gold.dim_location WHERE is_current = 1
+      SELECT COUNT(*) AS total FROM ${S.gold}.dim_location WHERE is_current = 1
     `);
 
     return {
@@ -702,7 +415,7 @@ async function getGoldenLocation(req: HttpRequest, ctx: InvocationContext): Prom
           sources_count,
           completeness_score,
           ROW_NUMBER() OVER (PARTITION BY location_hk ORDER BY snapshot_date DESC) AS rn
-        FROM gold.dim_location_quality
+        FROM ${S.gold}.dim_location_quality
       )
       SELECT
         CONVERT(VARCHAR(64), g.location_hk, 2) AS locationHk,
@@ -733,7 +446,7 @@ async function getGoldenLocation(req: HttpRequest, ctx: InvocationContext): Prom
         g.gopos_location_id AS goposLocationId,
         CAST(q.completeness_score AS FLOAT) AS completenessScore,
         q.sources_count AS sourcesCount
-      FROM gold.dim_location g
+      FROM ${S.gold}.dim_location g
       LEFT JOIN quality_latest q
         ON g.location_hk = q.location_hk AND q.rn = 1
       WHERE g.location_hk = CONVERT(VARBINARY(32), @locationHk, 2)
@@ -802,7 +515,7 @@ async function getStewardshipLog(req: HttpRequest, ctx: InvocationContext): Prom
         changed_at AS changedAt,
         pair_id AS pairId,
         reason
-      FROM silver_dv.stewardship_log
+      FROM ${S.silver}.stewardship_log
       WHERE canonical_hk = CONVERT(VARBINARY(32), @locationHk, 2)
       ORDER BY changed_at DESC
       LIMIT 100
@@ -851,7 +564,7 @@ async function getEntityConfig(req: HttpRequest, ctx: InvocationContext): Promis
         is_active AS isActive,
         CAST(match_threshold AS FLOAT) AS matchThreshold,
         CAST(auto_accept_threshold AS FLOAT) AS autoAcceptThreshold
-      FROM mdm_config.entity_config
+      FROM ${S.config}.entity_config
       WHERE entity_id = @entityId
       LIMIT 1
     `, { entityId });
@@ -896,7 +609,7 @@ async function getFieldConfigs(req: HttpRequest, ctx: InvocationContext): Promis
         is_blocking_key AS isBlockingKey,
         standardizer,
         is_active AS isActive
-      FROM mdm_config.field_config
+      FROM ${S.config}.field_config
       WHERE entity_id = @entityId
       ORDER BY field_name
     `, { entityId });
@@ -936,7 +649,7 @@ async function getSourcePriorities(req: HttpRequest, ctx: InvocationContext): Pr
         source_system AS sourceSystem,
         field_name AS fieldName,
         priority
-      FROM mdm_config.source_priority
+      FROM ${S.config}.source_priority
       WHERE entity_id = @entityId
       ORDER BY field_name, priority
     `, { entityId });
@@ -982,7 +695,7 @@ async function reviewPair(req: HttpRequest, ctx: InvocationContext): Promise<Htt
         status,
         reviewed_by  AS reviewedBy,
         reviewed_at  AS reviewedAt
-      FROM silver_dv.bv_location_match_candidates
+      FROM ${S.silver}.bv_location_match_candidates
       WHERE pair_id = @pairId
     `, { pairId: body.pairId });
 
@@ -1022,7 +735,7 @@ async function reviewPair(req: HttpRequest, ctx: InvocationContext): Promise<Htt
         SET XACT_ABORT ON;
         BEGIN TRANSACTION;
 
-        UPDATE silver_dv.bv_location_match_candidates
+        UPDATE ${S.silver}.bv_location_match_candidates
         SET status = @status, reviewed_by = @caller, reviewed_at = GETUTCDATE(), review_note = @reason
         WHERE pair_id = @pairId AND status = 'pending';
 
@@ -1035,7 +748,7 @@ async function reviewPair(req: HttpRequest, ctx: InvocationContext): Promise<Htt
 
         IF @isAccept = 1
         BEGIN
-          INSERT INTO silver_dv.bv_location_key_resolution
+          INSERT INTO ${S.silver}.bv_location_key_resolution
             (source_hk, canonical_hk, resolved_by, resolved_at, pair_id, resolution_type)
           SELECT
             CONVERT(VARBINARY(32), @sourceHk, 2),
@@ -1045,12 +758,12 @@ async function reviewPair(req: HttpRequest, ctx: InvocationContext): Promise<Htt
             @pairId,
             'manual'
           WHERE NOT EXISTS (
-            SELECT 1 FROM silver_dv.bv_location_key_resolution r
+            SELECT 1 FROM ${S.silver}.bv_location_key_resolution r
             WHERE r.source_hk = CONVERT(VARBINARY(32), @sourceHk, 2)
           );
         END
 
-        INSERT INTO silver_dv.stewardship_log (log_id, canonical_hk, action, changed_by, changed_at, pair_id, reason)
+        INSERT INTO ${S.silver}.stewardship_log (log_id, canonical_hk, action, changed_by, changed_at, pair_id, reason)
         VALUES (
           @logId,
           CONVERT(VARBINARY(32), @canonicalHk, 2),
@@ -1083,7 +796,7 @@ async function reviewPair(req: HttpRequest, ctx: InvocationContext): Promise<Htt
       if (msg.includes('CONCURRENCY_CONFLICT')) {
         const latest = await querySql<Record<string, unknown>>(`
           SELECT status, reviewed_by AS reviewedBy, reviewed_at AS reviewedAt
-          FROM silver_dv.bv_location_match_candidates
+          FROM ${S.silver}.bv_location_match_candidates
           WHERE pair_id = @pairId
         `, { pairId: body.pairId });
         return {
@@ -1147,7 +860,7 @@ async function overrideField(req: HttpRequest, ctx: InvocationContext): Promise<
   try {
     const rows = await querySql<Record<string, unknown>>(`
       SELECT ${body.fieldName} AS fieldValue
-      FROM gold.dim_location
+      FROM ${S.gold}.dim_location
       WHERE location_hk = CONVERT(VARBINARY(32), @locationHk, 2) AND is_current = 1
     `, { locationHk });
 
@@ -1169,7 +882,7 @@ async function overrideField(req: HttpRequest, ctx: InvocationContext): Promise<
       }
     }
     await execSql(`
-      INSERT INTO silver_dv.stewardship_log
+      INSERT INTO ${S.silver}.stewardship_log
         (log_id, canonical_hk, action, field_name, old_value, new_value, changed_by, changed_at, reason)
       VALUES (
         @logId,
@@ -1271,14 +984,18 @@ async function createLocation(req: HttpRequest, ctx: InvocationContext): Promise
   });
   const hashDiff = crypto.createHash('sha256').update(hashDiffInput).digest('hex');
 
+  // Atomowy batch: 5 INSERTów w jednej transakcji.
+  // XACT_ABORT ON gwarantuje rollback przy dowolnym błędzie (np. duplikat HK, FK, constraint).
+  // Zapobiega osieroconym rekordom w hub_location/sat_location_manual jeśli któryś krok zawiedzie.
   try {
     await execSql(`
-      INSERT INTO silver_dv.hub_location (location_hk, business_key, load_date, record_source)
-      VALUES (CONVERT(VARBINARY(32), @locationHk, 2), @businessKey, GETUTCDATE(), 'manual')
-    `, { locationHk, businessKey });
+      SET XACT_ABORT ON;
+      BEGIN TRANSACTION;
 
-    await execSql(`
-      INSERT INTO silver_dv.sat_location_manual (
+      INSERT INTO ${S.silver}.hub_location (location_hk, business_key, load_date, record_source)
+      VALUES (CONVERT(VARBINARY(32), @locationHk, 2), @businessKey, GETUTCDATE(), 'manual');
+
+      INSERT INTO ${S.silver}.sat_location_manual (
         location_hk, load_date, hash_diff, record_source,
         name, country, city, zip_code, address, phone, website_url,
         latitude, longitude, timezone, currency_code, cost_center, region, notes,
@@ -1288,9 +1005,44 @@ async function createLocation(req: HttpRequest, ctx: InvocationContext): Promise
         @name, @country, @city, @zipCode, @address, @phone, @websiteUrl,
         @latitude, @longitude, @timezone, @currencyCode, @costCenter, @region, @notes,
         @nameStd, @countryStd, @cityStd, @caller, GETUTCDATE()
-      )
+      );
+
+      INSERT INTO ${S.gold}.dim_location (
+        location_sk, location_hk, valid_from, is_current,
+        name, country, city, zip_code, address, phone,
+        latitude, longitude, website_url, timezone, currency_code,
+        cost_center, region, name_source, country_source, city_source,
+        created_at, updated_at
+      ) VALUES (
+        @locationSk, CONVERT(VARBINARY(32), @locationHk, 2), GETUTCDATE(), 1,
+        @name, @country, @city, @zipCode, @address, @phone,
+        @latitude, @longitude, @websiteUrl, @timezone, @currencyCode,
+        @costCenter, @region, 'manual', 'manual', 'manual',
+        GETUTCDATE(), GETUTCDATE()
+      );
+
+      INSERT INTO ${S.gold}.dim_location_quality
+        (location_hk, snapshot_date, sources_count, completeness_score, has_lightspeed, has_yext, has_mcwin, has_gopos)
+      VALUES (
+        CONVERT(VARBINARY(32), @locationHk, 2), GETUTCDATE(), 1,
+        @completeness, 0, 0, 0, 0
+      );
+
+      INSERT INTO ${S.silver}.stewardship_log
+        (log_id, canonical_hk, action, changed_by, changed_at, reason)
+      VALUES (
+        @logId,
+        CONVERT(VARBINARY(32), @locationHk, 2),
+        'manual_create',
+        @caller,
+        GETUTCDATE(),
+        @logReason
+      );
+
+      COMMIT TRANSACTION;
     `, {
       locationHk,
+      businessKey,
       hashDiff,
       name: body.name,
       country: body.country,
@@ -1310,68 +1062,10 @@ async function createLocation(req: HttpRequest, ctx: InvocationContext): Promise
       countryStd,
       cityStd,
       caller,
-    });
-
-    await execSql(`
-      INSERT INTO gold.dim_location (
-        location_sk, location_hk, valid_from, is_current,
-        name, country, city, zip_code, address, phone,
-        latitude, longitude, website_url, timezone, currency_code,
-        cost_center, region, name_source, country_source, city_source,
-        created_at, updated_at
-      ) VALUES (
-        @locationSk, CONVERT(VARBINARY(32), @locationHk, 2), GETUTCDATE(), 1,
-        @name, @country, @city, @zipCode, @address, @phone,
-        @latitude, @longitude, @websiteUrl, @timezone, @currencyCode,
-        @costCenter, @region, 'manual', 'manual', 'manual',
-        GETUTCDATE(), GETUTCDATE()
-      )
-    `, {
       locationSk: Date.now(),
-      locationHk,
-      name: body.name,
-      country: body.country,
-      city: body.city,
-      zipCode: body.zipCode ?? '',
-      address: body.address ?? '',
-      phone: body.phone ?? '',
-      latitude: body.latitude ?? null,
-      longitude: body.longitude ?? null,
-      websiteUrl: body.websiteUrl ?? '',
-      timezone: body.timezone ?? '',
-      currencyCode: body.currencyCode ?? '',
-      costCenter: body.costCenter ?? '',
-      region: body.region ?? '',
-    });
-
-    await execSql(`
-      INSERT INTO gold.dim_location_quality
-        (location_hk, snapshot_date, sources_count, completeness_score, has_lightspeed, has_yext, has_mcwin, has_gopos)
-      VALUES (
-        CONVERT(VARBINARY(32), @locationHk, 2), GETUTCDATE(), 1,
-        @completeness, 0, 0, 0, 0
-      )
-    `, {
-      locationHk,
       completeness: calcCompleteness(body),
-    });
-
-    await execSql(`
-      INSERT INTO silver_dv.stewardship_log
-        (log_id, canonical_hk, action, changed_by, changed_at, reason)
-      VALUES (
-        @logId,
-        CONVERT(VARBINARY(32), @locationHk, 2),
-        'manual_create',
-        @caller,
-        GETUTCDATE(),
-        @reason
-      )
-    `, {
       logId: crypto.randomUUID(),
-      locationHk,
-      caller,
-      reason: `Manual create: ${body.name}`,
+      logReason: `Manual create: ${body.name}`,
     });
 
     ctx.log(`Location created: ${locationHk} (${body.name}) by ${caller}`);

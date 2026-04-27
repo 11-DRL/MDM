@@ -4,15 +4,15 @@
 -- =============================================================================
 
 -- entity_config
-DELETE FROM mdm_config.entity_config WHERE entity_id = 'business_location';
-INSERT INTO mdm_config.entity_config
+DELETE FROM {{SCHEMA_CONFIG}}.entity_config WHERE entity_id = 'business_location';
+INSERT INTO {{SCHEMA_CONFIG}}.entity_config
   (entity_id, entity_name, hub_table, is_active, match_threshold, auto_accept_threshold, created_at)
 VALUES
   ('business_location', 'Business Location', 'hub_location', 1, 0.85, 0.97, SYSUTCDATETIME());
 
 -- field_config
-DELETE FROM mdm_config.field_config WHERE entity_id = 'business_location';
-INSERT INTO mdm_config.field_config
+DELETE FROM {{SCHEMA_CONFIG}}.field_config WHERE entity_id = 'business_location';
+INSERT INTO {{SCHEMA_CONFIG}}.field_config
   (entity_id, field_name, match_weight, is_blocking_key, standardizer, is_active)
 VALUES
   ('business_location', 'name',      0.50, 0, 'strip_accents_upper', 1),
@@ -25,8 +25,8 @@ VALUES
   ('business_location', 'longitude', 0.20, 0, NULL,                  1);
 
 -- source_priority
-DELETE FROM mdm_config.source_priority WHERE entity_id = 'business_location';
-INSERT INTO mdm_config.source_priority
+DELETE FROM {{SCHEMA_CONFIG}}.source_priority WHERE entity_id = 'business_location';
+INSERT INTO {{SCHEMA_CONFIG}}.source_priority
   (entity_id, source_system, field_name, priority, created_at)
 VALUES
   ('business_location', 'lightspeed', '*',           1, SYSUTCDATETIME()),
@@ -48,8 +48,8 @@ VALUES
   ('business_location', 'mcwin',      'region',      1, SYSUTCDATETIME());
 
 -- hash_config
-DELETE FROM mdm_config.hash_config WHERE entity_id = 'business_location';
-INSERT INTO mdm_config.hash_config
+DELETE FROM {{SCHEMA_CONFIG}}.hash_config WHERE entity_id = 'business_location';
+INSERT INTO {{SCHEMA_CONFIG}}.hash_config
   (entity_id, source_system, source_id_column, business_key_template)
 VALUES
   ('business_location', 'lightspeed', 'blId',          'lightspeed|{blId}'),
@@ -58,8 +58,8 @@ VALUES
   ('business_location', 'gopos',      'location_id',   'gopos|{location_id}');
 
 -- source_watermark — initial epoch-start watermarks
-DELETE FROM mdm_config.source_watermark WHERE entity_id = 'business_location';
-INSERT INTO mdm_config.source_watermark
+DELETE FROM {{SCHEMA_CONFIG}}.source_watermark WHERE entity_id = 'business_location';
+INSERT INTO {{SCHEMA_CONFIG}}.source_watermark
   (entity_id, source_system, last_load_date, last_run_id, updated_at)
 VALUES
   ('business_location', 'lightspeed', '1900-01-01', NULL, SYSUTCDATETIME()),

@@ -498,7 +498,8 @@ VITE_CLIENT_ID=<guid>
 - [ ] Fabric Lakehouse `lh_mdm` — DDL + seed
 - [ ] Fabric **Environment** z `jellyfish==1.0.3` podłączony do notebooków MDM
 - [ ] Azure AD App Registration — redirect URI na prod URL + `localhost:3000`
-- [ ] Azure Function App — Managed Identity włączona + **AZURE_TENANT_ID** w App Settings (wymagane dla JWT verify)
+- [ ] Azure AD App Registration — **Expose an API**: ustaw `Application ID URI` (`api://<clientId>`) + dodaj scope `access_as_user`
+- [ ] Azure Function App — Managed Identity włączona + **AZURE_TENANT_ID** + **EXPECTED_AUDIENCE** (`api://<clientId>`) w App Settings (wymagane dla JWT verify)
 - [ ] MSI rola **Contributor** w Fabric Workspace
 - [ ] Azure Function code deployed (`deploy-function.yml` lub ręcznie `az functionapp deployment source config-zip`)
 - [ ] Fabric Workload manifest — uzupełnione placeholdery (`__VITE_CLIENT_ID__`, `__FRONTEND_URL__`) + ikony PNG (`fabric/workload/FE/assets/mdm-icon-{32,44}.png`)
@@ -513,12 +514,97 @@ VITE_CLIENT_ID=<guid>
 | `VITE_WRITE_API_URL` | `deploy-ui.yml` | URL Function App, np. `https://func-mdm-stewardship.azurewebsites.net` |
 | `VITE_TENANT_ID` | `deploy-ui.yml` | Azure AD tenant GUID |
 | `VITE_CLIENT_ID` | `deploy-ui.yml` | App Registration client ID |
+| `VITE_API_SCOPE` (opcjonalny) | `deploy-ui.yml` | Pełny scope API, np. `api://<clientId>/access_as_user`. Pomiń, jeśli identyczny z domyślnym `api://${VITE_CLIENT_ID}/access_as_user` |
+
+**Function App Settings** (`az functionapp config appsettings set`):
+
+| Setting | Wartość |
+|---|---|
+| `AZURE_TENANT_ID` | Azure AD tenant GUID |
+| `EXPECTED_AUDIENCE` | `api://<clientId>` — musi być zgodne z `Application ID URI` w App Registration; bez tego Function zwraca 500 (fail-closed) |
 
 ### Uwaga: Łączność Fabric → Źródła danych
 
 Istniejący ADF używa Self-Hosted Integration Runtime. Fabric wymaga jednego z:
 - **VNet Data Gateway** (zalecane — zarządzany przez Microsoft)
 - **Managed Private Endpoint** (w ramach Fabric Capacity)
+
+---
+
+## 10b. Onboarding nowego klienta (replikowalna instalacja)
+
+Cały deployment jest sterowany przez **jeden plik**: [deploy/mdm.config.json](deploy/mdm.config.json) (gitignored). Skopiuj `deploy/mdm.config.example.json`, wypełnij wartości i uruchom `pwsh deploy/install.ps1`.
+
+### Krok po kroku
+
+```powershell
+# 1. Skopiuj template
+Copy-Item deploy/mdm.config.example.json deploy/mdm.config.json
+
+# 2. Wypełnij wartości w deploy/mdm.config.json (subscription, RG, tenant, clientId, workspace itp.)
+
+# 3. Walidacja przed deployem
+pwsh deploy/install.ps1 -WhatIf
+
+# 4. Pełny deploy
+pwsh deploy/install.ps1
+
+# (opcjonalnie) tylko Fabric, jeżeli Azure resources już istnieją:
+pwsh deploy/install.ps1 -SkipAzure
+
+# (opcjonalnie) tylko Function App settings:
+pwsh deploy/install.ps1 -SkipAzure -SkipFabric
+```
+
+### Skąd brać wartości do `mdm.config.json`
+
+| Pole | Skąd |
+|---|---|
+| `azure.subscriptionId` | `az account show --query id -o tsv` |
+| `azure.resourceGroup` | Nazwa istniejącego RG (lub nowego do utworzenia) |
+| `azure.location` | Region — np. `swedencentral`, `westeurope` |
+| `azure.functionAppName` | Globalnie unikalna nazwa (max 60 znaków, [a-z0-9-]) |
+| `azure.staticWebAppName` | Nazwa SWA |
+| `fabric.workspaceId` | URL workspace'a w Fabric Portal: `/groups/<guid>` |
+| `fabric.lakehouseName` | Np. `lh_mdm` (jeśli nie istnieje, `install.ps1` go utworzy) |
+| `fabric.warehouseName` | Np. `wh_mdm` (j.w.) — albo nazwa **istniejącego warehouse klienta** jeśli wpinasz się w gotowe |
+| `fabric.environmentName` | Fabric Environment z `jellyfish==1.0.3` (utwórz ręcznie w Fabric UI) |
+| `mdm.schemaPrefix` | `""` dla nowego workspace; `"mdm_"` jeżeli warehouse klienta ma już własne `silver_dv`/`gold` |
+| `auth.tenantId` | `az account show --query tenantId -o tsv` |
+| `auth.clientId` | App Registration → Overview → Application (client) ID |
+| `auth.apiScope` | `"auto"` = `api://<clientId>/access_as_user` (default); zostaw `auto` chyba że masz custom scope |
+
+### Co `install.ps1` robi automatycznie
+
+1. Waliduje `mdm.config.json` przeciw `mdm.config.schema.json` (JSON Schema)
+2. Wypisuje plan + prosi o potwierdzenie (`y`)
+3. Provisioning Azure: App Reg + Storage + Function + SWA + CORS (przez `create-azure-resources.ps1`)
+4. Provisioning Fabric: Lakehouse + Warehouse + DDL + seed `mdm_config` (przez `deploy-fabric.ps1` z `--schemas` JSON)
+5. Function App settings: `AZURE_TENANT_ID`, `EXPECTED_AUDIENCE`, `MDM_SCHEMA_BRONZE/SILVER/GOLD/CONFIG`
+6. Generuje `stewardship-ui/.env.production.local` (gitignored)
+7. Zapisuje `deploy/.deploy-output.json` z wartościami do GitHub Secrets (gitignored)
+8. Smoke test: `GET /api/health`
+
+### Schema prefix — co działa, co nie
+
+W obecnej wersji `schemaPrefix` jest **w pełni** przepuszczony do:
+
+✅ **Azure Function** — przez env vars `MDM_SCHEMA_*` (lib `azure-function/src/lib/schemas.ts`)
+✅ **Warehouse DDL** — przez `apply-warehouse-ddl.js --schemas` (placeholdery `{{SCHEMA_*}}` w `fabric/warehouse/ddl/**` i `fabric/warehouse/seed/**`)
+
+⚠️ **Nie jest jeszcze przepuszczony** do:
+- Lakehouse DDL w notebooku `nb_bootstrap_ddl.py` (hardcoded `CREATE SCHEMA bronze` itd.)
+- Pozostałe notebooki (bronze append, raw vault load, derive gold, match)
+- Pipelines Fabric (`PL_MDM_*.json`)
+
+**Dlatego:**
+- Jeżeli wpinasz się tylko w **istniejący Warehouse klienta** (typowy use-case "easy plug-in"), schema prefix działa poprawnie — Function + Warehouse są spójne.
+- Jeżeli wdrażasz **pełny stack z Lakehouse**, użyj `schemaPrefix: ""` (default). Notebooki utworzą `bronze`/`silver_dv`/`gold` w lakehouse.
+- Jeżeli klient ma już `silver_dv`/`gold` w lakehouse i chcesz uniknąć kolizji — zaktualizuj notebooki ręcznie (zmień nazwy schematów na linii `CREATE SCHEMA IF NOT EXISTS X`) lub deployuj lakehouse w osobnym workspace.
+
+### Pliki gitignored
+
+`mdm.config.json`, `.deploy-output.json`, `stewardship-ui/.env.production.local`, `azure-function/local.settings.json`, `deploy/.env.deploy` — żaden z tych plików nie powinien trafić do git.
 
 ---
 

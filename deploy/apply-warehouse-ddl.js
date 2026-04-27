@@ -1,5 +1,8 @@
 // Apply T-SQL DDL to a Fabric Warehouse using user's Azure login token.
-// Usage: node apply-warehouse-ddl.js <server> <database> <sqlFile>
+// Usage: node apply-warehouse-ddl.js <server> <database> <sqlFile> [--schemas=<json>]
+//   --schemas: opcjonalnie JSON z mapą zamian, np. '{"SCHEMA_SILVER":"mdm_silver_dv","SCHEMA_GOLD":"gold"}'
+//              Każdy {{KEY}} w pliku zostanie zastąpiony wartością.
+//              Jeśli plik zawiera placeholdery a brak --schemas → błąd przed wykonaniem.
 // Requires: az login; dependencies resolved from ../azure-function/node_modules
 
 const path = require('path');
@@ -13,15 +16,38 @@ if (!fs.existsSync(TEDIOUS_PATH)) {
 }
 const tedious = require(TEDIOUS_PATH);
 
-const [, , server, database, sqlFile] = process.argv;
+const args = process.argv.slice(2);
+const positional = args.filter(a => !a.startsWith('--'));
+const flags = Object.fromEntries(
+  args.filter(a => a.startsWith('--')).map(a => {
+    const [k, ...rest] = a.replace(/^--/, '').split('=');
+    return [k, rest.join('=')];
+  }),
+);
+const [server, database, sqlFile] = positional;
 if (!server || !database || !sqlFile) {
-  console.error('Usage: node apply-warehouse-ddl.js <server> <database> <sqlFile>');
+  console.error('Usage: node apply-warehouse-ddl.js <server> <database> <sqlFile> [--schemas=<json>]');
   process.exit(2);
 }
 
 function getAzToken() {
   const out = execSync('az account get-access-token --resource "https://database.windows.net" --query accessToken -o tsv', { encoding: 'utf8' });
   return out.trim();
+}
+
+// Substitute {{KEY}} placeholders. Throws if any unresolved placeholder remains.
+function applyTemplate(sqlText, schemas) {
+  let out = sqlText;
+  if (schemas) {
+    for (const [k, v] of Object.entries(schemas)) {
+      out = out.split(`{{${k}}}`).join(v);
+    }
+  }
+  const remaining = out.match(/\{\{[A-Z_]+\}\}/g);
+  if (remaining) {
+    throw new Error(`Unresolved placeholders in ${sqlFile}: ${[...new Set(remaining)].join(', ')}. Pass --schemas with all keys.`);
+  }
+  return out;
 }
 
 // Split on "GO" lines OR on blank-line boundaries between IF/CREATE blocks.
@@ -45,7 +71,16 @@ function runBatch(conn, batchSql) {
 
 (async () => {
   const token = getAzToken();
-  const sqlText = fs.readFileSync(sqlFile, 'utf8');
+  let sqlText = fs.readFileSync(sqlFile, 'utf8');
+  if (flags.schemas) {
+    const schemas = JSON.parse(flags.schemas);
+    sqlText = applyTemplate(sqlText, schemas);
+    console.log(`Applied template substitutions: ${Object.keys(schemas).join(', ')}`);
+  } else if (sqlText.match(/\{\{[A-Z_]+\}\}/)) {
+    // Plik ma placeholdery a my nie dostaliśmy --schemas → fail-fast (defaulty na poziomie callera).
+    console.error(`File ${sqlFile} contains {{...}} placeholders but no --schemas flag was provided.`);
+    process.exit(2);
+  }
   const batches = splitBatches(sqlText);
   console.log(`Loaded ${batches.length} batch(es) from ${sqlFile}`);
 

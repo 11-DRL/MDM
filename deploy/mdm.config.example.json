@@ -1,0 +1,38 @@
+{
+  "$schema": "./mdm.config.schema.json",
+  "_comment": "Skopiuj ten plik do mdm.config.json (gitignored) i wypełnij wartości dla swojego środowiska. Walidacja: pwsh deploy/install.ps1 -WhatIf",
+
+  "azure": {
+    "subscriptionId": "00000000-0000-0000-0000-000000000000",
+    "resourceGroup": "rg-fabric-poc-sdc",
+    "location": "westeurope",
+    "functionAppName": "func-mdm-stewardship",
+    "staticWebAppName": "swa-mdm-stewardship"
+  },
+
+  "fabric": {
+    "_comment": "workspaceId pobierzesz z URL workspace'u w Fabric Portal (po /groups/<guid>). Jeśli środowisko jellyfish jeszcze nie istnieje, install.ps1 ostrzeże ale nie utworzy — utworzysz ręcznie w Fabric.",
+    "workspaceId": "00000000-0000-0000-0000-000000000000",
+    "lakehouseName": "lh_mdm",
+    "warehouseName": "wh_mdm",
+    "environmentName": "env_mdm_jellyfish"
+  },
+
+  "mdm": {
+    "_comment": "schemaPrefix: pusty string = oryginalne nazwy (silver_dv, gold, mdm_config, bronze). Ustaw 'mdm_' jeśli warehouse klienta ma już własne schematy o tych nazwach. Wartości w 'schemas' to *base names* — efektywne nazwy będą prefix+base.",
+    "schemaPrefix": "",
+    "schemas": {
+      "bronze": "bronze",
+      "silver": "silver_dv",
+      "gold": "gold",
+      "config": "mdm_config"
+    }
+  },
+
+  "auth": {
+    "_comment": "tenantId i clientId z Azure AD App Registration. apiScope: zostaw 'auto' żeby użyć api://<clientId>/access_as_user, lub podaj pełny scope ręcznie. App Registration musi mieć skonfigurowane 'Expose an API' z tym scope.",
+    "tenantId": "00000000-0000-0000-0000-000000000000",
+    "clientId": "00000000-0000-0000-0000-000000000000",
+    "apiScope": "auto"
+  }
+}

@@ -1,11 +1,11 @@
 -- =============================================================================
--- Gold Layer — Golden Records (dim_location SCD2)
--- Lakehouse: lh_mdm | Schema: gold
--- Derivowany z silver_dv przez nb_derive_gold_location
+-- {{SCHEMA_GOLD}} Layer — Golden Records (dim_location SCD2)
+-- Lakehouse: lh_mdm | Schema: {{SCHEMA_GOLD}}
+-- Derivowany z {{SCHEMA_SILVER}} przez nb_derive_gold_location
 -- Survivorship: Lightspeed (1) > McWin (2) > Yext (3) > GoPOS (4)
 -- =============================================================================
 
-CREATE TABLE IF NOT EXISTS gold.dim_location (
+CREATE TABLE IF NOT EXISTS {{SCHEMA_GOLD}}.dim_location (
   -- Klucz surrogate
   location_sk          BIGINT    NOT NULL GENERATED ALWAYS AS IDENTITY,
   -- Klucz MDM (Hub key)
@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS gold.dim_location (
 ) USING DELTA;
 
 -- Quality metrics per golden record
-CREATE TABLE IF NOT EXISTS gold.dim_location_quality (
+CREATE TABLE IF NOT EXISTS {{SCHEMA_GOLD}}.dim_location_quality (
   location_hk          BINARY    NOT NULL,
   snapshot_date        TIMESTAMP NOT NULL,
   sources_count        INT,                  -- ile źródeł dostarcza dane

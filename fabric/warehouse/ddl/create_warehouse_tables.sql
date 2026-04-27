@@ -6,13 +6,13 @@
 -- =============================================================================
 
 -- ──────── SCHEMAS ───────────────────────────────────────────────────────────
-IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = 'mdm_config') EXEC('CREATE SCHEMA mdm_config');
-IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = 'silver_dv')  EXEC('CREATE SCHEMA silver_dv');
-IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = 'gold')       EXEC('CREATE SCHEMA gold');
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = '{{SCHEMA_CONFIG}}') EXEC('CREATE SCHEMA {{SCHEMA_CONFIG}}');
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = '{{SCHEMA_SILVER}}')  EXEC('CREATE SCHEMA {{SCHEMA_SILVER}}');
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = '{{SCHEMA_GOLD}}')       EXEC('CREATE SCHEMA {{SCHEMA_GOLD}}');
 
--- ──────── mdm_config ────────────────────────────────────────────────────────
-DROP TABLE IF EXISTS mdm_config.entity_config;
-CREATE TABLE mdm_config.entity_config (
+-- ──────── {{SCHEMA_CONFIG}} ────────────────────────────────────────────────────────
+DROP TABLE IF EXISTS {{SCHEMA_CONFIG}}.entity_config;
+CREATE TABLE {{SCHEMA_CONFIG}}.entity_config (
   entity_id              VARCHAR(64)    NOT NULL,
   entity_name            VARCHAR(200)   NOT NULL,
   hub_table              VARCHAR(200)   NOT NULL,
@@ -23,8 +23,8 @@ CREATE TABLE mdm_config.entity_config (
   updated_at             DATETIME2(6) NULL
 );
 
-DROP TABLE IF EXISTS mdm_config.field_config;
-CREATE TABLE mdm_config.field_config (
+DROP TABLE IF EXISTS {{SCHEMA_CONFIG}}.field_config;
+CREATE TABLE {{SCHEMA_CONFIG}}.field_config (
   entity_id        VARCHAR(64)    NOT NULL,
   field_name       VARCHAR(100)   NOT NULL,
   match_weight     FLOAT          NOT NULL,
@@ -33,8 +33,8 @@ CREATE TABLE mdm_config.field_config (
   is_active        BIT            NOT NULL
 );
 
-DROP TABLE IF EXISTS mdm_config.source_priority;
-CREATE TABLE mdm_config.source_priority (
+DROP TABLE IF EXISTS {{SCHEMA_CONFIG}}.source_priority;
+CREATE TABLE {{SCHEMA_CONFIG}}.source_priority (
   entity_id      VARCHAR(64)    NOT NULL,
   source_system  VARCHAR(64)    NOT NULL,
   field_name     VARCHAR(100)   NOT NULL,
@@ -42,16 +42,16 @@ CREATE TABLE mdm_config.source_priority (
   created_at     DATETIME2(6)   NOT NULL
 );
 
-DROP TABLE IF EXISTS mdm_config.hash_config;
-CREATE TABLE mdm_config.hash_config (
+DROP TABLE IF EXISTS {{SCHEMA_CONFIG}}.hash_config;
+CREATE TABLE {{SCHEMA_CONFIG}}.hash_config (
   entity_id             VARCHAR(64)    NOT NULL,
   source_system         VARCHAR(64)    NOT NULL,
   source_id_column      VARCHAR(200)   NOT NULL,
   business_key_template VARCHAR(400)   NOT NULL
 );
 
-DROP TABLE IF EXISTS mdm_config.source_watermark;
-CREATE TABLE mdm_config.source_watermark (
+DROP TABLE IF EXISTS {{SCHEMA_CONFIG}}.source_watermark;
+CREATE TABLE {{SCHEMA_CONFIG}}.source_watermark (
   entity_id       VARCHAR(64)    NOT NULL,
   source_system   VARCHAR(64)    NOT NULL,
   last_load_date  DATETIME2(6)   NOT NULL,
@@ -59,8 +59,8 @@ CREATE TABLE mdm_config.source_watermark (
   updated_at      DATETIME2(6)   NOT NULL
 );
 
-DROP TABLE IF EXISTS mdm_config.execution_log;
-CREATE TABLE mdm_config.execution_log (
+DROP TABLE IF EXISTS {{SCHEMA_CONFIG}}.execution_log;
+CREATE TABLE {{SCHEMA_CONFIG}}.execution_log (
   run_id          VARCHAR(100)   NOT NULL,
   entity_id       VARCHAR(64)    NOT NULL,
   source_system   VARCHAR(64) NULL,
@@ -74,17 +74,17 @@ CREATE TABLE mdm_config.execution_log (
   error_message   VARCHAR(4000) NULL
 );
 
--- ──────── silver_dv ─────────────────────────────────────────────────────────
-DROP TABLE IF EXISTS silver_dv.hub_location;
-CREATE TABLE silver_dv.hub_location (
+-- ──────── {{SCHEMA_SILVER}} ─────────────────────────────────────────────────────────
+DROP TABLE IF EXISTS {{SCHEMA_SILVER}}.hub_location;
+CREATE TABLE {{SCHEMA_SILVER}}.hub_location (
   location_hk   VARBINARY(32)     NOT NULL,
   business_key  VARCHAR(200)   NOT NULL,
   load_date     DATETIME2(6)   NOT NULL,
   record_source VARCHAR(64)    NOT NULL
 );
 
-DROP TABLE IF EXISTS silver_dv.sat_location_lightspeed;
-CREATE TABLE silver_dv.sat_location_lightspeed (
+DROP TABLE IF EXISTS {{SCHEMA_SILVER}}.sat_location_lightspeed;
+CREATE TABLE {{SCHEMA_SILVER}}.sat_location_lightspeed (
   location_hk   VARBINARY(32)     NOT NULL,
   load_date     DATETIME2(6)   NOT NULL,
   load_end_date DATETIME2(6) NULL,
@@ -102,8 +102,8 @@ CREATE TABLE silver_dv.sat_location_lightspeed (
   city_std      VARCHAR(200) NULL
 );
 
-DROP TABLE IF EXISTS silver_dv.sat_location_yext;
-CREATE TABLE silver_dv.sat_location_yext (
+DROP TABLE IF EXISTS {{SCHEMA_SILVER}}.sat_location_yext;
+CREATE TABLE {{SCHEMA_SILVER}}.sat_location_yext (
   location_hk   VARBINARY(32)     NOT NULL,
   load_date     DATETIME2(6)   NOT NULL,
   load_end_date DATETIME2(6) NULL,
@@ -125,8 +125,8 @@ CREATE TABLE silver_dv.sat_location_yext (
   city_std      VARCHAR(200) NULL
 );
 
-DROP TABLE IF EXISTS silver_dv.sat_location_mcwin;
-CREATE TABLE silver_dv.sat_location_mcwin (
+DROP TABLE IF EXISTS {{SCHEMA_SILVER}}.sat_location_mcwin;
+CREATE TABLE {{SCHEMA_SILVER}}.sat_location_mcwin (
   location_hk     VARBINARY(32)     NOT NULL,
   load_date       DATETIME2(6)   NOT NULL,
   load_end_date   DATETIME2(6) NULL,
@@ -145,8 +145,8 @@ CREATE TABLE silver_dv.sat_location_mcwin (
   city_std        VARCHAR(200) NULL
 );
 
-DROP TABLE IF EXISTS silver_dv.sat_location_gopos;
-CREATE TABLE silver_dv.sat_location_gopos (
+DROP TABLE IF EXISTS {{SCHEMA_SILVER}}.sat_location_gopos;
+CREATE TABLE {{SCHEMA_SILVER}}.sat_location_gopos (
   location_hk   VARBINARY(32)     NOT NULL,
   load_date     DATETIME2(6)   NOT NULL,
   load_end_date DATETIME2(6) NULL,
@@ -164,8 +164,8 @@ CREATE TABLE silver_dv.sat_location_gopos (
   city_std      VARCHAR(200) NULL
 );
 
-DROP TABLE IF EXISTS silver_dv.sat_location_manual;
-CREATE TABLE silver_dv.sat_location_manual (
+DROP TABLE IF EXISTS {{SCHEMA_SILVER}}.sat_location_manual;
+CREATE TABLE {{SCHEMA_SILVER}}.sat_location_manual (
   location_hk   VARBINARY(32)     NOT NULL,
   load_date     DATETIME2(6)   NOT NULL,
   load_end_date DATETIME2(6) NULL,
@@ -192,8 +192,8 @@ CREATE TABLE silver_dv.sat_location_manual (
   created_at    DATETIME2(6) NULL
 );
 
-DROP TABLE IF EXISTS silver_dv.pit_location;
-CREATE TABLE silver_dv.pit_location (
+DROP TABLE IF EXISTS {{SCHEMA_SILVER}}.pit_location;
+CREATE TABLE {{SCHEMA_SILVER}}.pit_location (
   location_hk       VARBINARY(32)     NOT NULL,
   snapshot_date     DATETIME2(6)   NOT NULL,
   sat_lightspeed_ld DATETIME2(6) NULL,
@@ -202,8 +202,8 @@ CREATE TABLE silver_dv.pit_location (
   sat_gopos_ld      DATETIME2(6) NULL
 );
 
-DROP TABLE IF EXISTS silver_dv.bv_location_match_candidates;
-CREATE TABLE silver_dv.bv_location_match_candidates (
+DROP TABLE IF EXISTS {{SCHEMA_SILVER}}.bv_location_match_candidates;
+CREATE TABLE {{SCHEMA_SILVER}}.bv_location_match_candidates (
   pair_id       VARCHAR(64)    NOT NULL,
   hk_left       VARBINARY(32)     NOT NULL,
   hk_right      VARBINARY(32)     NOT NULL,
@@ -221,8 +221,8 @@ CREATE TABLE silver_dv.bv_location_match_candidates (
   run_id        VARCHAR(100) NULL
 );
 
-DROP TABLE IF EXISTS silver_dv.bv_location_key_resolution;
-CREATE TABLE silver_dv.bv_location_key_resolution (
+DROP TABLE IF EXISTS {{SCHEMA_SILVER}}.bv_location_key_resolution;
+CREATE TABLE {{SCHEMA_SILVER}}.bv_location_key_resolution (
   source_hk       VARBINARY(32)     NOT NULL,
   canonical_hk    VARBINARY(32)     NOT NULL,
   resolved_by     VARCHAR(200)   NOT NULL,
@@ -231,8 +231,8 @@ CREATE TABLE silver_dv.bv_location_key_resolution (
   resolution_type VARCHAR(32)    NOT NULL
 );
 
-DROP TABLE IF EXISTS silver_dv.stewardship_log;
-CREATE TABLE silver_dv.stewardship_log (
+DROP TABLE IF EXISTS {{SCHEMA_SILVER}}.stewardship_log;
+CREATE TABLE {{SCHEMA_SILVER}}.stewardship_log (
   log_id       VARCHAR(64)    NOT NULL,
   canonical_hk VARBINARY(32)     NOT NULL,
   action       VARCHAR(64)    NOT NULL,
@@ -245,9 +245,9 @@ CREATE TABLE silver_dv.stewardship_log (
   reason       VARCHAR(4000) NULL
 );
 
--- ──────── gold ──────────────────────────────────────────────────────────────
-DROP TABLE IF EXISTS gold.dim_location;
-CREATE TABLE gold.dim_location (
+-- ──────── {{SCHEMA_GOLD}} ──────────────────────────────────────────────────────────────
+DROP TABLE IF EXISTS {{SCHEMA_GOLD}}.dim_location;
+CREATE TABLE {{SCHEMA_GOLD}}.dim_location (
   location_sk          BIGINT         NOT NULL,
   location_hk          VARBINARY(32)     NOT NULL,
   valid_from           DATETIME2(6)   NOT NULL,
@@ -279,8 +279,8 @@ CREATE TABLE gold.dim_location (
   gopos_location_id    VARCHAR(100) NULL
 );
 
-DROP TABLE IF EXISTS gold.dim_location_quality;
-CREATE TABLE gold.dim_location_quality (
+DROP TABLE IF EXISTS {{SCHEMA_GOLD}}.dim_location_quality;
+CREATE TABLE {{SCHEMA_GOLD}}.dim_location_quality (
   location_hk        VARBINARY(32)     NOT NULL,
   snapshot_date      DATETIME2(6)   NOT NULL,
   sources_count      INT NULL,

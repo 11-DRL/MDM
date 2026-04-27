@@ -8,4 +8,9 @@ __pycache__/
 *.pyc
 .ipynb_checkpoints/
 deploy/.env.deploy
+deploy/build-*/
+deploy/mdm.config.json
+deploy/.deploy-output.json
+stewardship-ui/.env.production.local
+stewardship-ui/.env.local
 azure-function/local.settings.json

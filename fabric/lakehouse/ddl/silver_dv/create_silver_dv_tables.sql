@@ -1,6 +1,6 @@
 -- =============================================================================
 -- Silver Layer — Data Vault Lite (Hubs + Satellites)
--- Lakehouse: lh_mdm | Schema: silver_dv
+-- Lakehouse: lh_mdm | Schema: {{SCHEMA_SILVER}}
 -- =============================================================================
 
 -- ---------------------------------------------------------------------------
@@ -8,7 +8,7 @@
 -- Jeden wiersz per unikalna lokalizacja (business entity identity)
 -- Hub key = SHA256(source_system || '|' || source_id)
 -- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS silver_dv.hub_location (
+CREATE TABLE IF NOT EXISTS {{SCHEMA_SILVER}}.hub_location (
   location_hk      BINARY  NOT NULL,   -- SHA256 hash key
   business_key     STRING  NOT NULL,   -- 'lightspeed|41839-1' (source_system|source_id)
   load_date        TIMESTAMP NOT NULL,
@@ -16,13 +16,13 @@ CREATE TABLE IF NOT EXISTS silver_dv.hub_location (
 ) USING DELTA;
 
 -- Indeks na business_key dla szybkiego MERGE
-CREATE INDEX IF NOT EXISTS idx_hub_location_bk ON silver_dv.hub_location (business_key);
+CREATE INDEX IF NOT EXISTS idx_hub_location_bk ON {{SCHEMA_SILVER}}.hub_location (business_key);
 
 -- ---------------------------------------------------------------------------
 -- SATELLITE: sat_location_lightspeed
 -- Historyzowane atrybuty z Lightspeed (load_end_date = NULL = aktualny)
 -- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS silver_dv.sat_location_lightspeed (
+CREATE TABLE IF NOT EXISTS {{SCHEMA_SILVER}}.sat_location_lightspeed (
   location_hk      BINARY    NOT NULL,
   load_date        TIMESTAMP NOT NULL,
   load_end_date    TIMESTAMP,           -- NULL = aktualny rekord
@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS silver_dv.sat_location_lightspeed (
 -- ---------------------------------------------------------------------------
 -- SATELLITE: sat_location_yext
 -- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS silver_dv.sat_location_yext (
+CREATE TABLE IF NOT EXISTS {{SCHEMA_SILVER}}.sat_location_yext (
   location_hk      BINARY    NOT NULL,
   load_date        TIMESTAMP NOT NULL,
   load_end_date    TIMESTAMP,
@@ -72,7 +72,7 @@ CREATE TABLE IF NOT EXISTS silver_dv.sat_location_yext (
 -- ---------------------------------------------------------------------------
 -- SATELLITE: sat_location_mcwin
 -- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS silver_dv.sat_location_mcwin (
+CREATE TABLE IF NOT EXISTS {{SCHEMA_SILVER}}.sat_location_mcwin (
   location_hk      BINARY    NOT NULL,
   load_date        TIMESTAMP NOT NULL,
   load_end_date    TIMESTAMP,
@@ -96,7 +96,7 @@ CREATE TABLE IF NOT EXISTS silver_dv.sat_location_mcwin (
 -- ---------------------------------------------------------------------------
 -- SATELLITE: sat_location_gopos
 -- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS silver_dv.sat_location_gopos (
+CREATE TABLE IF NOT EXISTS {{SCHEMA_SILVER}}.sat_location_gopos (
   location_hk      BINARY    NOT NULL,
   load_date        TIMESTAMP NOT NULL,
   load_end_date    TIMESTAMP,
@@ -120,7 +120,7 @@ CREATE TABLE IF NOT EXISTS silver_dv.sat_location_gopos (
 -- BUSINESS VAULT: Match Candidates
 -- Pary hub_location do przejrzenia przez stewarda
 -- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS silver_dv.bv_location_match_candidates (
+CREATE TABLE IF NOT EXISTS {{SCHEMA_SILVER}}.bv_location_match_candidates (
   pair_id          STRING    NOT NULL,  -- UUID
   hk_left          BINARY    NOT NULL,  -- hub_location_hk (wyższy priorytet)
   hk_right         BINARY    NOT NULL,  -- hub_location_hk (niższy priorytet)
@@ -142,7 +142,7 @@ CREATE TABLE IF NOT EXISTS silver_dv.bv_location_match_candidates (
 -- Steward decyduje: source_hk X = canonical_hk Y → ta sama restauracja
 -- Przy następnym DV load: dane z X lądują w Satellite Y
 -- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS silver_dv.bv_location_key_resolution (
+CREATE TABLE IF NOT EXISTS {{SCHEMA_SILVER}}.bv_location_key_resolution (
   source_hk        BINARY    NOT NULL,  -- hash key do zastąpienia
   canonical_hk     BINARY    NOT NULL,  -- docelowy canonical hash key
   resolved_by      STRING    NOT NULL,  -- user email / 'auto_match'
@@ -153,9 +153,9 @@ CREATE TABLE IF NOT EXISTS silver_dv.bv_location_key_resolution (
 
 -- ---------------------------------------------------------------------------
 -- PIT: Point-In-Time (snapshot aktualnych Satellite load_date per Hub)
--- Przyspiesza derivację Gold — bez PIT każdy SELECT to multi-join
+-- Przyspiesza derivację {{SCHEMA_GOLD}} — bez PIT każdy SELECT to multi-join
 -- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS silver_dv.pit_location (
+CREATE TABLE IF NOT EXISTS {{SCHEMA_SILVER}}.pit_location (
   location_hk           BINARY    NOT NULL,
   snapshot_date         TIMESTAMP NOT NULL DEFAULT current_timestamp(),
   -- Latest load_date per satellite (NULL jeśli brak danych z tego źródła)
@@ -169,7 +169,7 @@ CREATE TABLE IF NOT EXISTS silver_dv.pit_location (
 -- AUDIT: Stewardship Log
 -- Append-only, każda zmiana przez UI lub notebook
 -- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS silver_dv.stewardship_log (
+CREATE TABLE IF NOT EXISTS {{SCHEMA_SILVER}}.stewardship_log (
   log_id           STRING    NOT NULL DEFAULT uuid(),
   canonical_hk     BINARY    NOT NULL,
   action           STRING    NOT NULL, -- 'accept_match', 'reject_match', 'override_field', 'manual_create'
@@ -187,13 +187,13 @@ CREATE TABLE IF NOT EXISTS silver_dv.stewardship_log (
 -- Rekordy wprowadzone ręcznie przez stewardship UI (nie z systemów źródłowych)
 -- record_source = 'manual', priorytet survivorship = najwyższy (0) gdy is_golden=true
 -- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS silver_dv.sat_location_manual (
+CREATE TABLE IF NOT EXISTS {{SCHEMA_SILVER}}.sat_location_manual (
   location_hk      BINARY    NOT NULL,
   load_date        TIMESTAMP NOT NULL,
   load_end_date    TIMESTAMP,           -- NULL = aktualny rekord
   hash_diff        BINARY    NOT NULL,
   record_source    STRING    NOT NULL DEFAULT 'manual',
-  -- Atrybuty (identyczne pola co gold.dim_location)
+  -- Atrybuty (identyczne pola co {{SCHEMA_GOLD}}.dim_location)
   name             STRING    NOT NULL,
   country          STRING    NOT NULL,
   city             STRING    NOT NULL,

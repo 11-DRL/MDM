@@ -6,6 +6,10 @@
     Skrypt jednorazowy — uruchom raz, na końcu wypisze wszystkie wartości
     potrzebne do uzupełnienia .env i WorkloadManifest.xml.
 
+    Może być wywołany na 2 sposoby:
+      1. Bez parametrów — używa wartości hardcoded poniżej (legacy)
+      2. Z -Config (z install.ps1) — wartości z mdm.config.json
+
 .NOTES
     Wymagania:
       - az CLI zainstalowane: https://aka.ms/installazurecliwindows
@@ -14,24 +18,44 @@
 
 .EXAMPLE
     .\deploy\create-azure-resources.ps1
+    .\deploy\create-azure-resources.ps1 -Config $cfg   # z install.ps1
 #>
+param(
+    [object]$Config = $null
+)
 
 Set-StrictMode -Version Latest
 # Używamy Continue — az.exe zwraca błędy jako stderr, nie jako PowerShell exceptions
 $ErrorActionPreference = "Continue"
 
 # ─── KONFIGURACJA ────────────────────────────────────────────────────────────
-$SUBSCRIPTION_ID = "077ce12c-c878-44cc-818d-f8f6723d1665"
-$TENANT_ID       = "5d842dfd-009e-4f2f-bb85-78670fa303bb"
-$RESOURCE_GROUP  = "rg-fabric-poc-sdc"
-$LOCATION        = "swedencentral"         # Function App + Storage
-$SWA_LOCATION    = "westeurope"            # Static Web Apps (ograniczone regiony)
-$APP_NAME        = "MDM Stewardship"       # Nazwa App Registration
-
-# Nazwy zasobów
-$STORAGE_NAME    = "stmdmpoc077ce12c"      # max 24 znaków, tylko [a-z0-9]
-$FUNC_NAME       = "func-mdm-stewardship"
-$SWA_NAME        = "swa-mdm-stewardship"
+if ($Config) {
+    # Wartości z mdm.config.json
+    $SUBSCRIPTION_ID = $Config.Raw.azure.subscriptionId
+    $TENANT_ID       = $Config.Raw.auth.tenantId
+    $RESOURCE_GROUP  = $Config.Raw.azure.resourceGroup
+    $LOCATION        = $Config.Raw.azure.location
+    $SWA_LOCATION    = "westeurope"
+    $APP_NAME        = "MDM Stewardship"
+    $FUNC_NAME       = $Config.Raw.azure.functionAppName
+    $SWA_NAME        = if ($Config.Raw.azure.PSObject.Properties['staticWebAppName']) { $Config.Raw.azure.staticWebAppName } else { "swa-$FUNC_NAME" }
+    # Storage: deterministyczna nazwa z RG + sub (max 24 znaki, [a-z0-9])
+    $rgSuffix = ($RESOURCE_GROUP -replace '[^a-z0-9]', '').ToLower()
+    $subSuffix = ($SUBSCRIPTION_ID -replace '-', '').Substring(0, 8)
+    $STORAGE_NAME = ("st" + $rgSuffix + $subSuffix)
+    if ($STORAGE_NAME.Length -gt 24) { $STORAGE_NAME = $STORAGE_NAME.Substring(0, 24) }
+} else {
+    # Legacy hardcoded (gdy uruchomiony bez install.ps1)
+    $SUBSCRIPTION_ID = "077ce12c-c878-44cc-818d-f8f6723d1665"
+    $TENANT_ID       = "5d842dfd-009e-4f2f-bb85-78670fa303bb"
+    $RESOURCE_GROUP  = "rg-fabric-poc-sdc"
+    $LOCATION        = "swedencentral"
+    $SWA_LOCATION    = "westeurope"
+    $APP_NAME        = "MDM Stewardship"
+    $STORAGE_NAME    = "stmdmpoc077ce12c"
+    $FUNC_NAME       = "func-mdm-stewardship"
+    $SWA_NAME        = "swa-mdm-stewardship"
+}
 
 # ─── HELPERS ─────────────────────────────────────────────────────────────────
 function Step([string]$msg) { Write-Host "`n▶ $msg" -ForegroundColor Cyan }

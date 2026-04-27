@@ -5,6 +5,7 @@
     "FUNCTIONS_WORKER_RUNTIME": "node",
     "FABRIC_SQL_SERVER": "<workspace-id>.datawarehouse.fabric.microsoft.com",
     "FABRIC_DATABASE": "lh_mdm",
-    "AZURE_TENANT_ID": "5d842dfd-009e-4f2f-bb85-78670fa303bb"
+    "AZURE_TENANT_ID": "5d842dfd-009e-4f2f-bb85-78670fa303bb",
+    "EXPECTED_AUDIENCE": "api://<YOUR_CLIENT_ID>/access_as_user"
   }
 }

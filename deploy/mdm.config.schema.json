@@ -1,0 +1,70 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MDM Stewardship deployment config",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["azure", "fabric", "mdm", "auth"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "_comment": { "type": "string" },
+
+    "azure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subscriptionId", "resourceGroup", "location", "functionAppName"],
+      "properties": {
+        "subscriptionId": { "type": "string", "pattern": "^[0-9a-fA-F-]{36}$" },
+        "resourceGroup":  { "type": "string", "minLength": 1, "maxLength": 90 },
+        "location":       { "type": "string", "minLength": 1 },
+        "functionAppName": { "type": "string", "minLength": 2, "maxLength": 60 },
+        "staticWebAppName": { "type": "string", "minLength": 2, "maxLength": 60 }
+      }
+    },
+
+    "fabric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workspaceId", "lakehouseName", "warehouseName"],
+      "properties": {
+        "_comment":        { "type": "string" },
+        "workspaceId":     { "type": "string", "pattern": "^[0-9a-fA-F-]{36}$" },
+        "lakehouseName":   { "type": "string", "minLength": 1, "maxLength": 64 },
+        "warehouseName":   { "type": "string", "minLength": 1, "maxLength": 64 },
+        "environmentName": { "type": "string", "minLength": 1, "maxLength": 64 }
+      }
+    },
+
+    "mdm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaPrefix", "schemas"],
+      "properties": {
+        "_comment":     { "type": "string" },
+        "schemaPrefix": { "type": "string", "pattern": "^[a-z0-9_]*$", "maxLength": 16 },
+        "schemas": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["bronze", "silver", "gold", "config"],
+          "properties": {
+            "bronze": { "type": "string", "pattern": "^[a-z0-9_]+$" },
+            "silver": { "type": "string", "pattern": "^[a-z0-9_]+$" },
+            "gold":   { "type": "string", "pattern": "^[a-z0-9_]+$" },
+            "config": { "type": "string", "pattern": "^[a-z0-9_]+$" }
+          }
+        }
+      }
+    },
+
+    "auth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tenantId", "clientId"],
+      "properties": {
+        "_comment": { "type": "string" },
+        "tenantId": { "type": "string", "pattern": "^[0-9a-fA-F-]{36}$" },
+        "clientId": { "type": "string", "pattern": "^[0-9a-fA-F-]{36}$" },
+        "apiScope": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

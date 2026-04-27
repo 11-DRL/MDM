@@ -1,11 +1,11 @@
 -- =============================================================================
 -- MDM Configuration Tables
--- Lakehouse: lh_mdm | Schema: mdm_config
+-- Lakehouse: lh_mdm | Schema: {{SCHEMA_CONFIG}}
 -- Wzorzec: maintenance.tblDwhMigrationTable z adf-manage-dwh-gwc
 -- =============================================================================
 
 -- Definicje encji MDM (które encje są aktywne, jaki próg matchingu)
-CREATE TABLE IF NOT EXISTS mdm_config.entity_config (
+CREATE TABLE IF NOT EXISTS {{SCHEMA_CONFIG}}.entity_config (
   entity_id        STRING  NOT NULL,   -- 'business_location', 'item', 'employee'
   entity_name      STRING  NOT NULL,
   hub_table        STRING  NOT NULL,   -- 'hub_location'
@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS mdm_config.entity_config (
 ) USING DELTA;
 
 -- Konfiguracja pól encji: wagi do matchingu, standaryzacja
-CREATE TABLE IF NOT EXISTS mdm_config.field_config (
+CREATE TABLE IF NOT EXISTS {{SCHEMA_CONFIG}}.field_config (
   entity_id        STRING  NOT NULL,
   field_name       STRING  NOT NULL,   -- 'name', 'city', 'zip_code'
   match_weight     DOUBLE  NOT NULL DEFAULT 0.0,
@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS mdm_config.field_config (
 ) USING DELTA;
 
 -- Priorytety źródeł do survivorship (niższy numer = wyższy priorytet)
-CREATE TABLE IF NOT EXISTS mdm_config.source_priority (
+CREATE TABLE IF NOT EXISTS {{SCHEMA_CONFIG}}.source_priority (
   entity_id        STRING  NOT NULL,
   source_system    STRING  NOT NULL,   -- 'lightspeed', 'yext', 'mcwin', 'gopos'
   field_name       STRING  NOT NULL,   -- '*' = wszystkie pola
@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS mdm_config.source_priority (
 ) USING DELTA;
 
 -- Konfiguracja hashowania dla Hub keys
-CREATE TABLE IF NOT EXISTS mdm_config.hash_config (
+CREATE TABLE IF NOT EXISTS {{SCHEMA_CONFIG}}.hash_config (
   entity_id        STRING  NOT NULL,
   source_system    STRING  NOT NULL,
   source_id_column STRING  NOT NULL,   -- kolumna z ID źródłowym
@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS mdm_config.hash_config (
 ) USING DELTA;
 
 -- Watermark na potrzeby incremental load (wzorzec: tblExtractionLog)
-CREATE TABLE IF NOT EXISTS mdm_config.source_watermark (
+CREATE TABLE IF NOT EXISTS {{SCHEMA_CONFIG}}.source_watermark (
   entity_id        STRING    NOT NULL,
   source_system    STRING    NOT NULL,
   last_load_date   TIMESTAMP NOT NULL DEFAULT '1900-01-01T00:00:00',
@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS mdm_config.source_watermark (
 ) USING DELTA;
 
 -- Log wykonań (wzorzec: logging.spInsertMainLogging)
-CREATE TABLE IF NOT EXISTS mdm_config.execution_log (
+CREATE TABLE IF NOT EXISTS {{SCHEMA_CONFIG}}.execution_log (
   run_id           STRING    NOT NULL,
   entity_id        STRING    NOT NULL,
   source_system    STRING,

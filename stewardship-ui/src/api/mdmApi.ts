@@ -21,8 +21,10 @@ const WRITE_API_URL = import.meta.env.VITE_WRITE_API_URL ?? '';
 const TENANT_ID = import.meta.env.VITE_TENANT_ID ?? 'mock-tenant';
 const CLIENT_ID = import.meta.env.VITE_CLIENT_ID ?? 'mock-client';
 
-// For standalone mode we request Graph User.Read token.
-const DEFAULT_SCOPE = 'User.Read';
+// Scope dla naszego API w Function App. Token musi mieć aud = api://<clientId>,
+// inaczej Function odrzuci go (EXPECTED_AUDIENCE check).
+// Wymaga zdefiniowania w App Registration: "Expose an API" → scope `access_as_user`.
+export const API_SCOPE = import.meta.env.VITE_API_SCOPE ?? `api://${CLIENT_ID}/access_as_user`;
 
 export const msalInstance = new PublicClientApplication({
   auth: {
@@ -40,7 +42,7 @@ async function getAccessToken(): Promise<string> {
   const accounts = msalInstance.getAllAccounts();
   if (accounts.length === 0) throw new Error('Not authenticated');
   const result = await msalInstance.acquireTokenSilent({
-    scopes: [DEFAULT_SCOPE],
+    scopes: [API_SCOPE],
     account: accounts[0],
   });
   return result.accessToken;

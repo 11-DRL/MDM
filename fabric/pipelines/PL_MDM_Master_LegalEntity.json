@@ -1,0 +1,74 @@
+{
+  "name": "PL_MDM_Master_LegalEntity",
+  "properties": {
+    "description": "MDM Master pipeline for Legal Entity domain. Uses generic notebooks (nb_load_raw_vault, nb_derive_gold) with entity_id='legal_entity'. No matching step (match_engine='none').",
+    "activities": [
+      {
+        "name": "ACT_GEN_SPRC_SaveMainLoggingInfo",
+        "type": "Script",
+        "dependsOn": [],
+        "typeProperties": {
+          "scripts": [{
+            "type": "NonQuery",
+            "text": {
+              "value": "@concat('INSERT INTO mdm_config.execution_log (run_id, entity_id, process_name, status, started_at) VALUES (''', pipeline().RunId, ''', ''legal_entity'', ''PL_MDM_Master_LegalEntity'', ''Starting'', current_timestamp())')",
+              "type": "Expression"
+            }
+          }]
+        },
+        "linkedServiceName": { "referenceName": "LS_Fabric_Lakehouse", "type": "LinkedServiceReference" }
+      },
+      {
+        "name": "ACT_NTB_LoadRawVault",
+        "type": "SynapseNotebook",
+        "dependsOn": [
+          { "activity": "ACT_GEN_SPRC_SaveMainLoggingInfo", "dependencyConditions": ["Succeeded"] }
+        ],
+        "typeProperties": {
+          "notebook": { "referenceName": "nb_load_raw_vault", "type": "NotebookReference" },
+          "parameters": {
+            "run_id":      { "value": "@pipeline().RunId", "type": "string" },
+            "entity_id":   { "value": "legal_entity", "type": "string" },
+            "tenant_name": { "value": "@pipeline().parameters.__paramTenantName", "type": "string" },
+            "full_load":   { "value": "@string(pipeline().parameters.__paramFullLoad)", "type": "string" }
+          }
+        }
+      },
+      {
+        "name": "ACT_NTB_DeriveGold",
+        "type": "SynapseNotebook",
+        "dependsOn": [
+          { "activity": "ACT_NTB_LoadRawVault", "dependencyConditions": ["Succeeded"] }
+        ],
+        "typeProperties": {
+          "notebook": { "referenceName": "nb_derive_gold", "type": "NotebookReference" },
+          "parameters": {
+            "run_id":    { "value": "@pipeline().RunId", "type": "string" },
+            "entity_id": { "value": "legal_entity", "type": "string" }
+          }
+        }
+      },
+      {
+        "name": "ACT_GEN_EPIPE_ErrorReporting",
+        "type": "ExecutePipeline",
+        "dependsOn": [
+          { "activity": "ACT_NTB_DeriveGold",   "dependencyConditions": ["Failed"] },
+          { "activity": "ACT_NTB_LoadRawVault",  "dependencyConditions": ["Failed"] }
+        ],
+        "typeProperties": {
+          "pipeline": { "referenceName": "PL_MDM_ErrorReporting", "type": "PipelineReference" },
+          "waitOnCompletion": true,
+          "parameters": {
+            "__paramMasterRunId": { "value": "@pipeline().RunId", "type": "Expression" }
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "__paramTenantName": { "type": "string", "defaultValue": "losteria" },
+      "__paramFullLoad":   { "type": "bool",   "defaultValue": false }
+    },
+    "folder": { "name": "MDM/Master" },
+    "annotations": ["mdm", "data-vault", "legal-entity", "f1"]
+  }
+}

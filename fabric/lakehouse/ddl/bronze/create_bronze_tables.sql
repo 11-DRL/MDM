@@ -1,11 +1,11 @@
 -- =============================================================================
--- Bronze Layer — Raw Landing Zone
--- Lakehouse: lh_mdm | Schema: bronze
+-- {{SCHEMA_BRONZE}} Layer — Raw Landing Zone
+-- Lakehouse: lh_mdm | Schema: {{SCHEMA_BRONZE}}
 -- Append-only Delta tables, dane 1:1 ze źródeł
 -- =============================================================================
 
 -- Lightspeed: GET /f/data/businesses
-CREATE TABLE IF NOT EXISTS bronze.lightspeed_businesses (
+CREATE TABLE IF NOT EXISTS {{SCHEMA_BRONZE}}.lightspeed_businesses (
   -- Lightspeed native fields
   businessId            BIGINT,
   businessName          STRING,
@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS bronze.lightspeed_businesses (
 ) USING DELTA;
 
 -- Yext: Locations API
-CREATE TABLE IF NOT EXISTS bronze.yext_locations (
+CREATE TABLE IF NOT EXISTS {{SCHEMA_BRONZE}}.yext_locations (
   -- Yext native fields
   id                    STRING,
   name                  STRING,
@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS bronze.yext_locations (
 ) USING DELTA;
 
 -- McWin: Restaurant Masterdata export (SFTP/ADLS file)
-CREATE TABLE IF NOT EXISTS bronze.mcwin_restaurant_masterdata (
+CREATE TABLE IF NOT EXISTS {{SCHEMA_BRONZE}}.mcwin_restaurant_masterdata (
   -- McWin native fields (CSV/Excel export)
   restaurant_id         STRING,
   restaurant_name       STRING,
@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS bronze.mcwin_restaurant_masterdata (
 ) USING DELTA;
 
 -- GoPOS: Locations API
-CREATE TABLE IF NOT EXISTS bronze.gopos_locations (
+CREATE TABLE IF NOT EXISTS {{SCHEMA_BRONZE}}.gopos_locations (
   -- GoPOS native fields
   location_id           STRING,
   location_name         STRING,

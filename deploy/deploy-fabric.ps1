@@ -23,6 +23,14 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$WorkspaceId,
 
+    [string]$LakehouseName = $LakehouseName,
+    [string]$WarehouseName = $WarehouseName,
+
+    # JSON z mapą schema placeholderów dla apply-warehouse-ddl.js, np.
+    # '{"SCHEMA_BRONZE":"bronze","SCHEMA_SILVER":"silver_dv","SCHEMA_GOLD":"gold","SCHEMA_CONFIG":"mdm_config"}'
+    # Domyślnie używa nazw bez prefixu (zachowanie wsteczne).
+    [string]$SchemasJson = '{"SCHEMA_BRONZE":"bronze","SCHEMA_SILVER":"silver_dv","SCHEMA_GOLD":"gold","SCHEMA_CONFIG":"mdm_config"}',
+
     [switch]$SkipSeed
 )
 
@@ -111,11 +119,11 @@ function Invoke-FabricRaw {
 function ConvertTo-FabricNotebookB64 {
     param(
         [string]$PythonFile,
-        [string]$LakehouseName = "lh_mdm",
+        [string]$LakehouseName = $LakehouseName,
         [Parameter(Mandatory = $true)][string]$LakehouseId,
         [Parameter(Mandatory = $true)][string]$LakehouseWorkspaceId,
         [string]$WarehouseId,
-        [string]$WarehouseName = "wh_mdm"
+        [string]$WarehouseName = $WarehouseName
     )
 
     $raw   = Get-Content $PythonFile -Raw -Encoding UTF8
@@ -280,19 +288,19 @@ function Run-Notebook {
 }
 
 # ─── 1. LAKEHOUSE ─────────────────────────────────────────────────────────────
-Step "Tworzenie Lakehouse 'lh_mdm'..."
+Step "Tworzenie Lakehouse $LakehouseName..."
 # Sprawdź czy już istnieje
 $existingLh = (Invoke-Fabric GET "/workspaces/$WorkspaceId/lakehouses").value `
-    | Where-Object { $_.displayName -eq "lh_mdm" } | Select-Object -First 1
+    | Where-Object { $_.displayName -eq $LakehouseName } | Select-Object -First 1
 
 if ($existingLh) {
     $LAKEHOUSE_ID = $existingLh.id
-    OK "Lakehouse 'lh_mdm' już istnieje (id=$LAKEHOUSE_ID)"
+    OK "Lakehouse $LakehouseName już istnieje (id=$LAKEHOUSE_ID)"
     Warn "  Jeśli lakehouse był utworzony bez enableSchemas, CREATE SCHEMA nie zadziała — usuń i redeploy."
 } else {
     # Create z enableSchemas — operacja jest async (202 + operation-id)
     $body = @{
-        displayName     = "lh_mdm"
+        displayName     = $LakehouseName
         description     = "MDM Stewardship - Bronze / Silver DV / Gold"
         creationPayload = @{ enableSchemas = $true }
     } | ConvertTo-Json -Depth 10 -Compress
@@ -316,25 +324,25 @@ if ($existingLh) {
         if ($op.status -ne "Succeeded") { Fail "Lakehouse creation failed: $($op | ConvertTo-Json -Depth 10)" }
         # Result
         $existingLh = (Invoke-Fabric GET "/workspaces/$WorkspaceId/lakehouses").value `
-            | Where-Object { $_.displayName -eq "lh_mdm" } | Select-Object -First 1
-        if (-not $existingLh) { Fail "Lakehouse 'lh_mdm' not found after async create" }
+            | Where-Object { $_.displayName -eq $LakehouseName } | Select-Object -First 1
+        if (-not $existingLh) { Fail "Lakehouse $LakehouseName not found after async create" }
         $LAKEHOUSE_ID = $existingLh.id
-        OK "Lakehouse 'lh_mdm' utworzony (id=$LAKEHOUSE_ID, schemas=enabled)"
+        OK "Lakehouse $LakehouseName utworzony (id=$LAKEHOUSE_ID, schemas=enabled)"
     } else {
         Fail "Unexpected status code: $($resp.StatusCode)"
     }
 }
 
 # ─── 1b. WAREHOUSE ────────────────────────────────────────────────────────────
-Step "Tworzenie Warehouse 'wh_mdm'..."
+Step "Tworzenie Warehouse $WarehouseName..."
 $existingWh = (Invoke-Fabric GET "/workspaces/$WorkspaceId/warehouses").value `
-    | Where-Object { $_.displayName -eq "wh_mdm" } | Select-Object -First 1
+    | Where-Object { $_.displayName -eq $WarehouseName } | Select-Object -First 1
 if ($existingWh) {
     $WAREHOUSE_ID = $existingWh.id
-    OK "Warehouse 'wh_mdm' juz istnieje (id=$WAREHOUSE_ID)"
+    OK "Warehouse $WarehouseName juz istnieje (id=$WAREHOUSE_ID)"
 } else {
     $whBody = @{
-        displayName = "wh_mdm"
+        displayName = $WarehouseName
         description = "MDM Stewardship - operational writes (mdm_config, silver_dv, gold)"
     } | ConvertTo-Json -Compress
     $whResp = Invoke-WebRequest -Method POST `
@@ -354,10 +362,10 @@ if ($existingWh) {
         } while ($op.status -notin @("Succeeded","Failed"))
         if ($op.status -ne "Succeeded") { Fail "Warehouse creation failed: $($op | ConvertTo-Json -Depth 10)" }
         $existingWh = (Invoke-Fabric GET "/workspaces/$WorkspaceId/warehouses").value `
-            | Where-Object { $_.displayName -eq "wh_mdm" } | Select-Object -First 1
-        if (-not $existingWh) { Fail "Warehouse 'wh_mdm' not found after async create" }
+            | Where-Object { $_.displayName -eq $WarehouseName } | Select-Object -First 1
+        if (-not $existingWh) { Fail "Warehouse $WarehouseName not found after async create" }
         $WAREHOUSE_ID = $existingWh.id
-        OK "Warehouse 'wh_mdm' utworzony (id=$WAREHOUSE_ID)"
+        OK "Warehouse $WarehouseName utworzony (id=$WAREHOUSE_ID)"
     } else {
         Fail "Unexpected status code: $($whResp.StatusCode)"
     }
@@ -378,12 +386,12 @@ if (-not (Test-Path $ddlFile))    { Fail "Missing $ddlFile" }
 if (-not (Test-Path $configFile)) { Fail "Missing $configFile" }
 if (-not (Test-Path $ddlRunner))  { Fail "Missing $ddlRunner" }
 
-& node $ddlRunner $WAREHOUSE_ENDPOINT "wh_mdm" $ddlFile
+& node $ddlRunner $WAREHOUSE_ENDPOINT $WarehouseName $ddlFile "--schemas=$SchemasJson"
 if ($LASTEXITCODE -ne 0) { Fail "Warehouse DDL apply failed" }
 OK "Warehouse DDL zaaplikowany"
 
 Step "Seeding mdm_config (T-SQL)..."
-& node $ddlRunner $WAREHOUSE_ENDPOINT "wh_mdm" $configFile
+& node $ddlRunner $WAREHOUSE_ENDPOINT $WarehouseName $configFile "--schemas=$SchemasJson"
 if ($LASTEXITCODE -ne 0) { Fail "mdm_config seed failed" }
 OK "mdm_config seed OK"
 

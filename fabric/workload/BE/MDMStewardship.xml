@@ -1,24 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-  MDMStewardship.xml — definicja pojedynczego Item Type
-  Fabric traktuje każdą instancję tego itemu jak natywny artefakt workspace.
-  Dokumentacja: https://learn.microsoft.com/fabric/extensibility-toolkit/manifest-item
--->
-<Item xmlns="http://schemas.microsoft.com/fabric/workload/2024/01">
-
-  <!--
-    ItemType: unikalny identyfikator w obrębie workloadu
-    Użytkownicy będą tworzyć instancje "MDMStewardshipApp" w workspace
-  -->
-  <ItemType>MDMStewardshipApp</ItemType>
-
-  <!--
-    Scopes jakich Fabric host użyje przy pobieraniu tokenu dla naszej apki.
-    PowerBI API = dostęp do Fabric SQL Endpoint (ten sam token co MSAL w mdmApi.ts)
-  -->
-  <RequiredScopes>
-    <Scope>https://analysis.windows.net/powerbi/api/Dataset.ReadWrite.All</Scope>
-    <Scope>https://analysis.windows.net/powerbi/api/Workspace.Read.All</Scope>
-  </RequiredScopes>
-
-</Item>
+<ItemManifestConfiguration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" SchemaVersion="2.0.0">
+  <Item TypeName="LOsteria.MDMStewardship.MDMStewardshipApp" Category="Data">
+    <Workload WorkloadName="LOsteria.MDMStewardship" />
+  </Item>
+</ItemManifestConfiguration>

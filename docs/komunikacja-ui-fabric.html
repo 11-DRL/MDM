@@ -1,0 +1,704 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MDM Stewardship — Komunikacja UI ↔ Fabric</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --panel: #1e293b;
+    --panel-2: #263449;
+    --text: #e2e8f0;
+    --muted: #94a3b8;
+    --accent: #38bdf8;
+    --accent-2: #818cf8;
+    --green: #4ade80;
+    --yellow: #facc15;
+    --red: #f87171;
+    --border: #334155;
+    --code-bg: #0b1220;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%);
+    color: var(--text);
+    line-height: 1.6;
+    padding: 40px 20px;
+  }
+  .container { max-width: 1200px; margin: 0 auto; }
+  header {
+    text-align: center;
+    margin-bottom: 50px;
+    padding-bottom: 30px;
+    border-bottom: 1px solid var(--border);
+  }
+  header h1 {
+    font-size: 2.5em;
+    margin: 0 0 10px;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  header p { color: var(--muted); margin: 0; font-size: 1.1em; }
+  .toc {
+    background: var(--panel);
+    padding: 20px 30px;
+    border-radius: 12px;
+    margin-bottom: 40px;
+    border: 1px solid var(--border);
+  }
+  .toc h3 { margin: 0 0 15px; color: var(--accent); }
+  .toc ol { margin: 0; padding-left: 20px; columns: 2; gap: 30px; }
+  .toc a { color: var(--text); text-decoration: none; }
+  .toc a:hover { color: var(--accent); }
+  section {
+    background: var(--panel);
+    padding: 30px 35px;
+    border-radius: 12px;
+    margin-bottom: 30px;
+    border: 1px solid var(--border);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+  }
+  section h2 {
+    color: var(--accent);
+    margin-top: 0;
+    border-bottom: 2px solid var(--border);
+    padding-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  section h2 .num {
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    color: var(--bg);
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75em;
+    font-weight: bold;
+  }
+  h3 { color: var(--accent-2); margin-top: 25px; }
+  h4 { color: var(--text); margin-top: 20px; margin-bottom: 10px; }
+
+  /* Diagram ASCII */
+  pre.ascii {
+    background: var(--code-bg);
+    color: #cbd5e1;
+    padding: 20px;
+    border-radius: 8px;
+    overflow-x: auto;
+    font-family: 'Cascadia Code', 'Consolas', monospace;
+    font-size: 0.85em;
+    line-height: 1.4;
+    border: 1px solid var(--border);
+  }
+  code {
+    background: var(--code-bg);
+    color: var(--accent);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: 'Cascadia Code', 'Consolas', monospace;
+    font-size: 0.9em;
+  }
+  pre code { background: transparent; padding: 0; color: inherit; }
+  pre.code {
+    background: var(--code-bg);
+    padding: 18px;
+    border-radius: 8px;
+    overflow-x: auto;
+    border-left: 4px solid var(--accent);
+    font-size: 0.85em;
+  }
+
+  /* Tabele */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 15px 0;
+    background: var(--panel-2);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  th {
+    background: var(--bg);
+    color: var(--accent);
+    text-align: left;
+    padding: 12px 15px;
+    font-weight: 600;
+    border-bottom: 2px solid var(--accent);
+  }
+  td {
+    padding: 10px 15px;
+    border-bottom: 1px solid var(--border);
+  }
+  tr:last-child td { border-bottom: none; }
+  tr:hover { background: rgba(56,189,248,0.05); }
+
+  /* Krok/flow */
+  .flow-step {
+    background: var(--panel-2);
+    padding: 15px 20px;
+    border-radius: 8px;
+    margin: 10px 0;
+    border-left: 4px solid var(--accent);
+    position: relative;
+  }
+  .flow-step .num {
+    position: absolute;
+    left: -15px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: var(--accent);
+    color: var(--bg);
+    width: 30px; height: 30px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: bold;
+    font-size: 0.85em;
+  }
+
+  /* Kolorowane klocki */
+  .box {
+    padding: 15px 20px;
+    border-radius: 8px;
+    margin: 10px 0;
+    border-left: 4px solid;
+  }
+  .box-info    { background: rgba(56,189,248,0.08); border-color: var(--accent); }
+  .box-success { background: rgba(74,222,128,0.08); border-color: var(--green); }
+  .box-warn    { background: rgba(250,204,21,0.08); border-color: var(--yellow); }
+  .box-danger  { background: rgba(248,113,113,0.08); border-color: var(--red); }
+  .box strong { color: var(--accent); }
+
+  /* Aktorzy */
+  .actors {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 15px;
+    margin: 20px 0;
+  }
+  .actor {
+    background: var(--panel-2);
+    padding: 18px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+  }
+  .actor h4 { margin-top: 0; color: var(--accent); }
+  .actor ul { margin: 10px 0 0; padding-left: 20px; color: var(--muted); font-size: 0.9em; }
+
+  /* Badge */
+  .badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 0.75em;
+    font-weight: 600;
+    margin-left: 8px;
+  }
+  .badge-green { background: rgba(74,222,128,0.2); color: var(--green); }
+  .badge-yellow { background: rgba(250,204,21,0.2); color: var(--yellow); }
+  .badge-red { background: rgba(248,113,113,0.2); color: var(--red); }
+  .badge-blue { background: rgba(56,189,248,0.2); color: var(--accent); }
+
+  /* TL;DR */
+  .tldr {
+    background: linear-gradient(135deg, rgba(56,189,248,0.15), rgba(129,140,248,0.15));
+    border: 2px solid var(--accent);
+    padding: 25px 30px;
+    border-radius: 12px;
+    margin: 40px 0 0;
+  }
+  .tldr h2 { border: none; color: var(--accent); }
+  .tldr ul { line-height: 2; }
+
+  ul li::marker { color: var(--accent); }
+
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 768px) {
+    .two-col { grid-template-columns: 1fr; }
+    .toc ol { columns: 1; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<header>
+  <h1>🔐 Komunikacja UI ↔ Fabric</h1>
+  <p>MDM Stewardship — pełny flow z autentykacją end-to-end</p>
+</header>
+
+<div class="toc">
+  <h3>Spis treści</h3>
+  <ol>
+    <li><a href="#s1">Aktorzy i komponenty</a></li>
+    <li><a href="#s2">Rejestracja tożsamości</a></li>
+    <li><a href="#s3">Ładowanie aplikacji</a></li>
+    <li><a href="#s4">Login flow (OAuth 2.0 + PKCE)</a></li>
+    <li><a href="#s5">Odczyt danych</a></li>
+    <li><a href="#s6">Walidacja tokenu w Function</a></li>
+    <li><a href="#s7">Token lifecycle</a></li>
+    <li><a href="#s8">Nagłówki i CORS</a></li>
+    <li><a href="#s9">Obsługa błędów</a></li>
+    <li><a href="#s10">Model zaufania</a></li>
+    <li><a href="#s11">Zmienne środowiskowe</a></li>
+    <li><a href="#s12">E2E: Approve match</a></li>
+  </ol>
+</div>
+
+<section id="s1">
+  <h2><span class="num">1</span>Aktorzy i komponenty</h2>
+  <pre class="ascii">┌──────────────┐      ┌────────────────┐      ┌─────────────────┐
+│ Przeglądarka │      │ Azure Function │      │  Fabric         │
+│ Stewardship  │◄────►│ (mdmWrite)     │◄────►│  Warehouse      │
+│ UI (React)   │      │                │      │  (SQL Endpoint) │
+└──────────────┘      └────────────────┘      └─────────────────┘
+      │                       │                       ▲
+      │                       │                       │
+      ▼                       ▼                       │
+   MSAL.js            Managed Identity ─────────────── (read/write)
+      │                       │
+      ▼                       ▼
+ ┌─────────────────────────────────┐
+ │ Microsoft Entra ID (tenant)     │
+ │ - App registration (UI SPA)     │
+ │ - Function App (Managed Ident.) │
+ │ - User accounts (stewardzi)     │
+ └─────────────────────────────────┘</pre>
+
+  <div class="actors">
+    <div class="actor">
+      <h4>🌐 Browser (UI)</h4>
+      <ul>
+        <li>React + Vite + Fluent UI</li>
+        <li>MSAL.js (cache w sessionStorage)</li>
+        <li>Hostowany na Static Web App</li>
+      </ul>
+    </div>
+    <div class="actor">
+      <h4>⚙️ Azure Function</h4>
+      <ul>
+        <li>Node.js + TypeScript</li>
+        <li>Managed Identity do Fabric</li>
+        <li>EasyAuth waliduje JWT</li>
+      </ul>
+    </div>
+    <div class="actor">
+      <h4>🏢 Fabric Warehouse</h4>
+      <ul>
+        <li>SQL Endpoint (mssql protocol)</li>
+        <li>RBAC na poziomie workspace</li>
+        <li>Audit log nativne</li>
+      </ul>
+    </div>
+    <div class="actor">
+      <h4>🔑 Entra ID</h4>
+      <ul>
+        <li>Tenant + App Registrations</li>
+        <li>Wystawia JWT tokens</li>
+        <li>JWKS endpoint dla walidacji</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="s2">
+  <h2><span class="num">2</span>Rejestracja tożsamości (raz, setup)</h2>
+
+  <h3>App Registration (UI SPA)</h3>
+  <div class="box box-info">
+    <strong>clientId:</strong> <code>e902f516-fc6d-4b45-8e19-3ba2dc030cce</code><br>
+    <strong>Platform:</strong> Single-Page Application (SPA) z PKCE<br>
+    <strong>Redirect URIs:</strong>
+    <ul>
+      <li><code>http://localhost:3000</code> <span class="badge badge-yellow">dev</span></li>
+      <li><code>https://ashy-bush-00879c703.7.azurestaticapps.net</code> <span class="badge badge-green">prod</span></li>
+    </ul>
+    <strong>Implicit grant:</strong> ❌ wyłączone (PKCE zastępuje)<br>
+    <strong>API permissions:</strong> <code>User.Read</code> + <code>api://&lt;function&gt;/.default</code>
+  </div>
+
+  <h3>Function App</h3>
+  <div class="box box-info">
+    <strong>Identity:</strong> System-assigned Managed Identity <span class="badge badge-green">włączone</span><br>
+    <strong>Fabric RBAC:</strong> MI Function → rola <code>Contributor</code> w workspace<br>
+    <strong>Auth settings:</strong>
+    <ul>
+      <li>Provider: Azure AD</li>
+      <li>Issuer: <code>https://login.microsoftonline.com/&lt;tenantId&gt;/v2.0</code></li>
+      <li>Audience: clientId SPA</li>
+    </ul>
+  </div>
+</section>
+
+<section id="s3">
+  <h2><span class="num">3</span>Ładowanie aplikacji (cold start)</h2>
+  <pre class="ascii">┌─────────────┐                    ┌─────────┐
+│ Browser     │                    │   SWA   │
+└─────┬───────┘                    └────┬────┘
+      │  GET https://ashy-bush...       │
+      ├────────────────────────────────►│
+      │  index.html + main.tsx          │
+      │◄────────────────────────────────┤
+      │                                 │
+      │  main.tsx → MSAL init           │
+      │  PublicClientApplication({      │
+      │    clientId, authority,         │
+      │    redirectUri })               │
+      │                                 │
+      │  acquireTokenSilent()?          │
+      │  └─ brak konta w cache          │
+      │  └─ loginPopup() / Redirect</pre>
+</section>
+
+<section id="s4">
+  <h2><span class="num">4</span>Login flow (OAuth 2.0 Authorization Code + PKCE)</h2>
+
+  <div class="flow-step"><span class="num">1</span>
+    Browser (MSAL) generuje <code>code_verifier</code> + <code>code_challenge</code> (SHA256)
+  </div>
+  <div class="flow-step"><span class="num">2</span>
+    <code>GET /authorize</code> z <code>code_challenge</code>, <code>client_id</code>, <code>redirect_uri</code>, <code>scope</code>
+  </div>
+  <div class="flow-step"><span class="num">3</span>
+    Entra ID wyświetla login (user + MFA)
+  </div>
+  <div class="flow-step"><span class="num">4</span>
+    Consent raz na scope
+  </div>
+  <div class="flow-step"><span class="num">5</span>
+    Redirect <code>302</code> do SWA z <code>?code=ABC&state=XYZ</code>
+  </div>
+  <div class="flow-step"><span class="num">6</span>
+    <code>POST /token</code> z <code>code</code> + <code>code_verifier</code>
+  </div>
+  <div class="flow-step"><span class="num">7</span>
+    Entra waliduje PKCE → zwraca <code>{id_token, access_token, refresh_token}</code>
+  </div>
+  <div class="flow-step"><span class="num">8</span>
+    MSAL zapisuje tokeny w <code>sessionStorage</code>
+  </div>
+  <div class="flow-step"><span class="num">9</span>
+    UI renderuje GoldenList
+  </div>
+
+  <div class="box box-success">
+    <strong>🛡️ Klucz bezpieczeństwa:</strong> secrets <strong>nigdy</strong> nie są w kodzie SPA.
+    PKCE gwarantuje że ktoś kto przechwyci <code>code</code> bez <code>code_verifier</code>
+    nie wymieni go na token.
+  </div>
+</section>
+
+<section id="s5">
+  <h2><span class="num">5</span>Odczyt danych — dwa warianty</h2>
+
+  <h3>🔹 Wariant A: UI → Fabric SQL Endpoint bezpośrednio</h3>
+  <pre class="ascii">Browser (MSAL.js)                    Fabric SQL Endpoint
+1. acquireTokenSilent({
+     scopes: ["https://analysis.windows.net/powerbi/api/.default"]
+   }) → token Fabric
+
+2. POST https://api.fabric.microsoft.com/v1/workspaces/{id}/sqlEndpoints/{id}/query
+   Authorization: Bearer &lt;token&gt;
+   Body: { "queryString": "SELECT * FROM dim_location_golden" }
+
+                       ───► 3. Fabric waliduje token + user RBAC na workspace
+                            4. Wykonuje SQL
+                            5. Zwraca JSON rows ◄───
+
+6. UI renderuje tabelę</pre>
+  <div class="box box-warn">
+    <strong>⚠️ Problem:</strong> user musi mieć <strong>bezpośredni RBAC</strong> do workspace.
+    OK dla małego zespołu, nieskalowalne dla setek userów.
+  </div>
+
+  <h3>🔹 Wariant B: UI → Function → Fabric <span class="badge badge-green">preferowany (write)</span></h3>
+  <pre class="ascii">Browser                Function                  Fabric
+1. kliknięto "Approve match"
+2. acquireTokenSilent({ scopes: ["api://&lt;function&gt;/.default"] })
+
+3. POST /api/mdm/write
+   Authorization: Bearer &lt;user-token&gt;
+   Body: { action: "approve_match", pairId: 42, ... }
+                               ───►
+                                  4. EasyAuth waliduje JWT (JWKS z Entra)
+                                  5. Handler czyta claims, sprawdza role "Steward"
+                                  6. DefaultAzureCredential() → MI token
+                                     dla database.windows.net
+                                                          ───►
+                                                              7. BEGIN TRAN
+                                                                 UPDATE dim_location_golden
+                                                                 INSERT fact_steward_audit
+                                                                 COMMIT  ◄───
+                                  8. Return 200 { ok: true }
+                               ◄───
+9. UI toast + refresh</pre>
+
+  <div class="box box-success">
+    <strong>✅ Zalety wariantu B:</strong>
+    <ul>
+      <li><strong>Managed Identity</strong> — brak sekretów, rotacja automatyczna</li>
+      <li><strong>Business rules w Function</strong> (walidacja, autoryzacja)</li>
+      <li><strong>Audit trail</strong> zachowany (Function zna usera, Fabric zna Function)</li>
+      <li><strong>Rate-limit</strong> w jednym miejscu</li>
+      <li>User <strong>NIE musi</strong> mieć RBAC w Fabric (tylko MI)</li>
+    </ul>
+  </div>
+</section>
+
+<section id="s6">
+  <h2><span class="num">6</span>Walidacja tokenu w Function — kod</h2>
+<pre class="code"><code>// azure-function/src/functions/mdmWrite.ts
+export async function mdmWrite(req, context) {
+  // 1. EasyAuth zwalidował token i wstrzyknął nagłówki
+  const userOid = req.headers["x-ms-client-principal-id"];
+  const userUpn = req.headers["x-ms-client-principal-name"];
+  const principal = JSON.parse(
+    Buffer.from(req.headers["x-ms-client-principal"], "base64").toString()
+  );
+  const roles = principal.claims
+    .filter(c => c.typ === "roles").map(c => c.val);
+
+  // 2. RBAC
+  if (!roles.includes("Steward"))
+    return { status: 403, body: "Brak roli Steward" };
+
+  // 3. Walidacja payloadu
+  if (!["approve_match","reject_match","edit_golden","new_location"]
+        .includes(req.body.action))
+    return { status: 400, body: "Nieznana akcja" };
+
+  // 4. Połączenie z Fabric przez Managed Identity
+  const cred = new DefaultAzureCredential();
+  const token = await cred.getToken("https://database.windows.net/.default");
+  const conn = await sql.connect({
+    server: process.env.FABRIC_SQL_ENDPOINT,
+    database: process.env.FABRIC_WAREHOUSE_NAME,
+    authentication: {
+      type: "azure-active-directory-access-token",
+      options: { token: token.token }
+    }
+  });
+
+  // 5. Transakcja + audit
+  const tx = conn.transaction();
+  await tx.begin();
+  try {
+    await executeAction(tx, req.body, userOid);
+    await tx.request()
+      .input("user_oid", userOid)
+      .input("user_upn", userUpn)
+      .input("action", req.body.action)
+      .query(`INSERT INTO fact_steward_audit 
+              (user_oid, user_upn, action, timestamp)
+              VALUES (@user_oid, @user_upn, @action, SYSUTCDATETIME())`);
+    await tx.commit();
+    return { status: 200, body: { ok: true } };
+  } catch (e) {
+    await tx.rollback();
+    throw e;
+  }
+}</code></pre>
+</section>
+
+<section id="s7">
+  <h2><span class="num">7</span>Token lifecycle</h2>
+  <table>
+    <thead>
+      <tr><th>Typ tokenu</th><th>Gdzie</th><th>Lifetime</th><th>Refresh</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>id_token</code> (user)</td>
+        <td>browser</td>
+        <td>1h</td>
+        <td>refresh_token → /token</td>
+      </tr>
+      <tr>
+        <td><code>access_token</code> (→ Function)</td>
+        <td>browser</td>
+        <td>1h</td>
+        <td>MSAL silent renew (iframe, prompt=none)</td>
+      </tr>
+      <tr>
+        <td>MI access_token (→ Fabric)</td>
+        <td>Function env</td>
+        <td>24h</td>
+        <td>auto (DefaultAzureCredential)</td>
+      </tr>
+      <tr>
+        <td><code>refresh_token</code></td>
+        <td>browser SS</td>
+        <td>24h / 90d</td>
+        <td>sliding, nowy przy użyciu</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="box box-info">
+    <strong>Silent renewal w SPA:</strong> MSAL.js robi <code>acquireTokenSilent()</code> 5 min przed expiry.
+    Jeśli refresh_token ważny → bez interakcji. Jeśli expired → popup/redirect.
+  </div>
+</section>
+
+<section id="s8">
+  <h2><span class="num">8</span>Nagłówki i CORS</h2>
+  <h3>Request UI → Function</h3>
+<pre class="code"><code>POST /api/mdm/write HTTP/1.1
+Host: func-mdm-stewardship.azurewebsites.net
+Origin: https://ashy-bush-00879c703.7.azurestaticapps.net
+Authorization: Bearer eyJ0eXAi... (JWT ~1.5KB)
+Content-Type: application/json</code></pre>
+
+  <h3>CORS preflight (OPTIONS)</h3>
+<pre class="code"><code>OPTIONS /api/mdm/write HTTP/1.1
+Origin: https://ashy-bush-00879c703.7.azurestaticapps.net
+Access-Control-Request-Method: POST
+Access-Control-Request-Headers: authorization, content-type
+
+→ 204 No Content
+  Access-Control-Allow-Origin: https://ashy-bush-...
+  Access-Control-Allow-Methods: POST, OPTIONS
+  Access-Control-Allow-Headers: authorization, content-type
+  Access-Control-Max-Age: 3600</code></pre>
+  <div class="box box-warn">
+    <strong>⚠️</strong> W produkcji CORS w Function App → Settings → CORS → Allowed Origins
+    <strong>NIE <code>*</code></strong>, tylko konkretna domena SWA.
+  </div>
+</section>
+
+<section id="s9">
+  <h2><span class="num">9</span>Obsługa błędów</h2>
+  <table>
+    <thead>
+      <tr><th>Błąd</th><th>Objaw</th><th>Przyczyna</th><th>Jak debugować</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="badge badge-red">401</span></td>
+        <td>Function odrzuca</td>
+        <td>Token expired / audience mismatch</td>
+        <td>jwt.io → sprawdź <code>aud</code>, <code>exp</code></td>
+      </tr>
+      <tr>
+        <td><span class="badge badge-red">403</span></td>
+        <td>Function zwraca</td>
+        <td>Brak app role</td>
+        <td>Entra → Enterprise Apps → Users → rola "Steward"</td>
+      </tr>
+      <tr>
+        <td><span class="badge badge-yellow">CORS</span></td>
+        <td>Network "blocked"</td>
+        <td>Origin nie w whitelist</td>
+        <td>Azure Portal → Function → CORS → dodaj domenę</td>
+      </tr>
+      <tr>
+        <td><span class="badge badge-red">500</span></td>
+        <td>"Login failed"</td>
+        <td>MI brak RBAC na workspace</td>
+        <td>Fabric → Manage access → dodaj MI</td>
+      </tr>
+      <tr>
+        <td><span class="badge badge-yellow">Token popup</span></td>
+        <td>Non-stop login</td>
+        <td><code>cacheLocation</code> = <code>"memory"</code></td>
+        <td>Zmień na <code>"sessionStorage"</code></td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="s10">
+  <h2><span class="num">10</span>Model zaufania (kto komu ufa)</h2>
+  <pre class="ascii">User ── logowanie ──► Entra ID
+  ▲                     │
+  │ token               │ wystawia token (claims: oid, upn, roles)
+  │                     ▼
+  └───────────────► Browser (MSAL cache)
+                        │
+                        │ Bearer token w Authorization header
+                        ▼
+                    Function ── weryfikuje JWT przez JWKS z Entra
+                        │
+                        │ Managed Identity (Function sama siebie identyfikuje)
+                        ▼
+                     Entra ID ── wystawia token dla database.windows.net
+                        │
+                        │ Bearer token
+                        ▼
+                    Fabric ── weryfikuje MI + RBAC na workspace
+                        │
+                        ▼
+                    Warehouse ── wykonuje SQL</pre>
+  <div class="box box-success">
+    <strong>🔐 Kluczowe:</strong> Fabric widzi w swoim audit "Function MI", ale w naszym
+    <code>fact_steward_audit</code> zapisujemy <code>user_oid</code> z tokenu UI
+    → <strong>pełna traceability</strong> kto co zmienił.
+  </div>
+</section>
+
+<section id="s11">
+  <h2><span class="num">11</span>Zmienne środowiskowe</h2>
+
+  <h3>UI (Static Web App) — <code>VITE_*</code></h3>
+<pre class="code"><code>VITE_CLIENT_ID=e902f516-fc6d-4b45-8e19-3ba2dc030cce   # public OK
+VITE_TENANT_ID=&lt;tenantId&gt;                              # public OK
+VITE_FUNCTION_URL=https://func-mdm-stewardship...      # public OK
+VITE_FUNCTION_SCOPE=api://&lt;func-app-id&gt;/.default       # public OK
+VITE_MOCK_MODE=false</code></pre>
+  <div class="box box-success">
+    <strong>✅ Zero sekretów!</strong> Wszystko jest jawne — specyfika SPA.
+    Bezpieczeństwo zapewnia PKCE + walidacja audience po stronie Function.
+  </div>
+
+  <h3>Function — App Settings (Azure Portal)</h3>
+<pre class="code"><code>FABRIC_SQL_ENDPOINT=&lt;server&gt;.datawarehouse.fabric.microsoft.com
+FABRIC_WAREHOUSE_NAME=wh_mdm_stewardship
+# MI bierze token automatycznie — brak connection stringa</code></pre>
+
+  <h3>Fabric workspace</h3>
+  <div class="box box-info">
+    <ul>
+      <li>Managed Identity Function <strong>dodana</strong> jako member workspace</li>
+      <li>Rola <code>Contributor</code> (do UPDATE/INSERT)</li>
+    </ul>
+  </div>
+</section>
+
+<section id="s12">
+  <h2><span class="num">12</span>E2E: "Approve match" — krok po kroku</h2>
+
+  <div class="flow-step"><span class="num">1</span>Steward klika "Approve" → React <code>onClick</code></div>
+  <div class="flow-step"><span class="num">2</span><code>useMdm.approveMatch(pairId)</code></div>
+  <div class="flow-step"><span class="num">3</span>MSAL: <code>acquireTokenSilent</code> → token (cached)</div>
+  <div class="flow-step"><span class="num">4</span><code>fetch POST /api/mdm/write</code> + <code>Authorization: Bearer</code></div>
+  <div class="flow-step"><span class="num">5</span>Function EasyAuth waliduje JWT → 200 przepuszcza</div>
+  <div class="flow-step"><span class="num">6</span>Handler: czyta claims, sprawdza role "Steward"</div>
+  <div class="flow-step"><span class="num">7</span><code>DefaultAzureCredential().getToken(...)</code></div>
+  <div class="flow-step"><span class="num">8</span><code>mssql.connect</code> z MI tokenem</div>
+  <div class="flow-step"><span class="num">9</span><code>BEGIN TRAN</code> → UPDATE golden + UPDATE match + INSERT audit → <code>COMMIT</code></div>
+  <div class="flow-step"><span class="num">10</span>Return <code>{ ok: true }</code></div>
+  <div class="flow-step"><span class="num">11</span>UI: toast + invalidate queryCache → re-fetch GoldenList</div>
+  <div class="flow-step"><span class="num">12</span>Lista odświeżona bez reloadu strony</div>
+</section>
+
+<div class="tldr">
+  <h2>📌 TL;DR</h2>
+  <ul>
+    <li><strong>UI → Entra:</strong> OAuth2 Authorization Code + PKCE (MSAL.js)</li>
+    <li><strong>UI → Function:</strong> JWT Bearer token (audience = Function)</li>
+    <li><strong>Function → Fabric:</strong> Managed Identity (audience = database.windows.net)</li>
+    <li><strong>Audit:</strong> Function wyciąga <code>user_oid</code> z tokenu UI, zapisuje w Fabric</li>
+    <li><strong>Zero sekretów</strong> w UI (SPA) ani w Function (MI zamiast connection string)</li>
+    <li><strong>RBAC:</strong> user ma app role "Steward" w Entra; MI Function ma Contributor w Fabric workspace</li>
+  </ul>
+</div>
+
+</div>
+</body>
+</html>

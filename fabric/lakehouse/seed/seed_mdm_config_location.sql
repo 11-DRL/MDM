@@ -4,13 +4,13 @@
 -- =============================================================================
 
 -- Encja: business_location
-INSERT INTO mdm_config.entity_config
+INSERT INTO {{SCHEMA_CONFIG}}.entity_config
   (entity_id, entity_name, hub_table, is_active, match_threshold, auto_accept_threshold)
 VALUES
   ('business_location', 'Business Location (Restauracja)', 'hub_location', true, 0.85, 0.97);
 
 -- Konfiguracja pól do matchingu
-INSERT INTO mdm_config.field_config
+INSERT INTO {{SCHEMA_CONFIG}}.field_config
   (entity_id, field_name, match_weight, is_blocking_key, standardizer)
 VALUES
   ('business_location', 'name',     0.50, false, 'uppercase_strip_accents'),
@@ -22,7 +22,7 @@ VALUES
 
 -- Priorytety źródeł (survivorship: Lightspeed > McWin > Yext > GoPOS)
 -- '*' = wszystkie pola, chyba że jest nadpisane per pole
-INSERT INTO mdm_config.source_priority
+INSERT INTO {{SCHEMA_CONFIG}}.source_priority
   (entity_id, source_system, field_name, priority)
 VALUES
   ('business_location', 'lightspeed', '*',          1),
@@ -40,7 +40,7 @@ VALUES
   ('business_location', 'mcwin',      'region',     1);
 
 -- Hash config: jak budować business_key per źródło
-INSERT INTO mdm_config.hash_config
+INSERT INTO {{SCHEMA_CONFIG}}.hash_config
   (entity_id, source_system, source_id_column, business_key_template)
 VALUES
   ('business_location', 'lightspeed', 'blId',          'lightspeed|{blId}'),
@@ -49,7 +49,7 @@ VALUES
   ('business_location', 'gopos',      'location_id',    'gopos|{location_id}');
 
 -- Watermark: start od zera (full load first run)
-INSERT INTO mdm_config.source_watermark
+INSERT INTO {{SCHEMA_CONFIG}}.source_watermark
   (entity_id, source_system, last_load_date)
 VALUES
   ('business_location', 'lightspeed', '1900-01-01T00:00:00'),

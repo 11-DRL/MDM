@@ -2,7 +2,7 @@
   "$schema": "https://developer.microsoft.com/json-schemas/fabric/extensibility-toolkit/product-manifest/2024-01/schema.json",
 
   "workloadName": "LOsteria.MDMStewardship",
-  "version": "1.0.0",
+  "version": "1.0.0-preview.1",
 
   "displayName": {
     "default": "MDM Stewardship"
